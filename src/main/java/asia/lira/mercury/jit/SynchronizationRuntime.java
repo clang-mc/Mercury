@@ -46,6 +46,10 @@ public final class SynchronizationRuntime {
         return !activeFrames.isEmpty();
     }
 
+    public ExecutionFrame currentFrame() {
+        return activeFrames.peek();
+    }
+
     public void onScoreUpdated(ScoreHolder holder, ScoreboardObjective objective, int value) {
         if (activeFrames.isEmpty()) {
             return;
