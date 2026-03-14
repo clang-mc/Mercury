@@ -4,6 +4,7 @@ import asia.lira.mercury.Mercury;
 import asia.lira.mercury.ir.FunctionIrDumper;
 import asia.lira.mercury.ir.FunctionIrExporter;
 import asia.lira.mercury.ir.FunctionIrRegistry;
+import asia.lira.mercury.jit.BaselineClassExporter;
 import asia.lira.mercury.jit.JitPreparationExporter;
 import com.mojang.brigadier.CommandDispatcher;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -60,6 +61,9 @@ public class CommandHandler implements CommandRegistrationCallback {
             JitPreparationExporter.ExportResult preparedResult = JitPreparationExporter.exportPrepared(
                     source.getServer().getRunDirectory()
             );
+            BaselineClassExporter.ExportResult classResult = BaselineClassExporter.exportClasses(
+                    source.getServer().getRunDirectory()
+            );
             source.sendFeedback(() -> Text.literal(
                     "Exported parsed=" + parsedResult.exportedCount()
                             + " to " + parsedResult.outputDirectory()
@@ -67,8 +71,10 @@ public class CommandHandler implements CommandRegistrationCallback {
                             + " to " + semanticResult.outputDirectory()
                             + ", prepared=" + preparedResult.exportedCount()
                             + " to " + preparedResult.outputDirectory()
+                            + ", classes=" + classResult.exportedCount()
+                            + " to " + classResult.outputDirectory()
             ), false);
-            return parsedResult.exportedCount() + semanticResult.exportedCount() + preparedResult.exportedCount();
+            return parsedResult.exportedCount() + semanticResult.exportedCount() + preparedResult.exportedCount() + classResult.exportedCount();
         } catch (Exception e) {
             source.sendError(Text.literal("Failed to export IR: " + e.getMessage()));
             return 0;
@@ -122,6 +128,21 @@ public class CommandHandler implements CommandRegistrationCallback {
         }
     }
 
+    private static int dumpClasses(ServerCommandSource source) {
+        try {
+            BaselineClassExporter.ExportResult result = BaselineClassExporter.exportClasses(
+                    source.getServer().getRunDirectory()
+            );
+            source.sendFeedback(() -> Text.literal(
+                    "Exported " + result.exportedCount() + " generated class files to " + result.outputDirectory()
+            ), false);
+            return result.exportedCount();
+        } catch (Exception e) {
+            source.sendError(Text.literal("Failed to export generated classes: " + e.getMessage()));
+            return 0;
+        }
+    }
+
     @Override
     public void register(@NotNull CommandDispatcher<ServerCommandSource> dispatcher,
                          CommandRegistryAccess access, CommandManager.RegistrationEnvironment environment) {
@@ -137,6 +158,9 @@ public class CommandHandler implements CommandRegistrationCallback {
                         )
                         .then(literal("prepared")
                                 .executes(context -> dumpPrepared(context.getSource()))
+                        )
+                        .then(literal("classes")
+                                .executes(context -> dumpClasses(context.getSource()))
                         )
                 )
         );

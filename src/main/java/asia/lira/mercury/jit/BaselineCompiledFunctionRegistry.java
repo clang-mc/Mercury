@@ -12,7 +12,7 @@ import java.util.Map;
 public final class BaselineCompiledFunctionRegistry {
     private static final BaselineCompiledFunctionRegistry INSTANCE = new BaselineCompiledFunctionRegistry();
 
-    private final Map<Identifier, BaselineProgram> programs = new LinkedHashMap<>();
+    private final Map<Identifier, CompiledArtifact> artifacts = new LinkedHashMap<>();
 
     private BaselineCompiledFunctionRegistry() {
     }
@@ -30,27 +30,34 @@ public final class BaselineCompiledFunctionRegistry {
             }
         }
 
-        Map<Identifier, BaselineProgram> compiled = new LinkedHashMap<>();
+        Map<Identifier, BaselineProgram> compiledPrograms = new LinkedHashMap<>();
         for (Map.Entry<Identifier, BaselineProgram.Builder> entry : candidates.entrySet()) {
-            if (isCompilable(entry.getKey(), candidates, compiled, new LinkedHashMap<>())) {
-                compiled.put(entry.getKey(), entry.getValue().build());
+            if (isCompilable(entry.getKey(), candidates, compiledPrograms, new LinkedHashMap<>())) {
+                compiledPrograms.put(entry.getKey(), entry.getValue().build());
             }
         }
 
-        programs.clear();
-        programs.putAll(compiled);
+        artifacts.clear();
+        for (Map.Entry<Identifier, BaselineProgram> entry : compiledPrograms.entrySet()) {
+            artifacts.put(entry.getKey(), BaselineBytecodeCompiler.compile(entry.getValue()));
+        }
     }
 
     public int count() {
-        return programs.size();
+        return artifacts.size();
     }
 
     public List<Identifier> ids() {
-        return List.copyOf(programs.keySet());
+        return List.copyOf(artifacts.keySet());
     }
 
     public @Nullable BaselineProgram get(Identifier id) {
-        return programs.get(id);
+        CompiledArtifact artifact = artifacts.get(id);
+        return artifact == null ? null : artifact.program();
+    }
+
+    public @Nullable CompiledArtifact getArtifact(Identifier id) {
+        return artifacts.get(id);
     }
 
     private boolean isCompilable(
@@ -83,5 +90,13 @@ public final class BaselineCompiledFunctionRegistry {
         }
 
         return true;
+    }
+
+    public record CompiledArtifact(
+            BaselineProgram program,
+            CompiledFunction compiledFunction,
+            byte[] classBytes,
+            String internalClassName
+    ) {
     }
 }

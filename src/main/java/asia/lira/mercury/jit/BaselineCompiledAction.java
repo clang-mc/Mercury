@@ -11,12 +11,10 @@ import net.minecraft.server.command.AbstractServerCommandSource;
 import java.util.BitSet;
 
 public final class BaselineCompiledAction<T extends AbstractServerCommandSource<T>> implements SourcedCommandAction<T> {
-    private final BaselineProgram program;
-    private final BaselineProgram fallback;
+    private final BaselineCompiledFunctionRegistry.CompiledArtifact artifact;
 
-    public BaselineCompiledAction(BaselineProgram program, BaselineProgram fallback) {
-        this.program = program;
-        this.fallback = fallback;
+    public BaselineCompiledAction(BaselineCompiledFunctionRegistry.CompiledArtifact artifact) {
+        this.artifact = artifact;
     }
 
     @Override
@@ -25,24 +23,20 @@ public final class BaselineCompiledAction<T extends AbstractServerCommandSource<
         ExecutionFrame current = runtime.currentFrame();
         boolean ownsFrame = false;
         if (current == null) {
-            current = new ExecutionFrame(program.id(), JitPreparationRegistry.getInstance().slotRegistry().count());
+            current = new ExecutionFrame(artifact.program().id(), JitPreparationRegistry.getInstance().slotRegistry().count());
             runtime.pushFrame(current);
             ownsFrame = true;
         }
 
         try {
-            BaselineExecutionEngine.ExecutionOutcome outcome = BaselineExecutionEngine.execute(program, current, source, context);
-            if (outcome.mode() == BaselineExecutionEngine.ExecutionOutcome.Mode.FALLBACK) {
-                flushDirtySlots(current);
-                BaselineExecutionEngine.execute(fallback, current, source, context);
-                return;
-            }
-
+            BaselineExecutionEngine.ExecutionOutcome outcome = artifact.compiledFunction().invoke(current, source, context);
             flushDirtySlots(current);
             if (outcome.mode() == BaselineExecutionEngine.ExecutionOutcome.Mode.RETURN) {
                 frame.succeed(outcome.returnValue());
                 frame.doReturn();
             }
+        } catch (Throwable throwable) {
+            throw new RuntimeException("Failed to execute compiled function " + artifact.program().id(), throwable);
         } finally {
             if (ownsFrame) {
                 runtime.popFrame(current);

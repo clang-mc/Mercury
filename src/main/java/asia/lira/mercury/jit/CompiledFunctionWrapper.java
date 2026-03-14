@@ -28,14 +28,12 @@ public final class CompiledFunctionWrapper<T extends AbstractServerCommandSource
 
     @Override
     public Procedure<T> withMacroReplaced(@Nullable NbtCompound arguments, CommandDispatcher<T> dispatcher) throws MacroException {
-        BaselineProgram program = BaselineCompiledFunctionRegistry.getInstance().get(id);
-        if (program == null) {
+        BaselineCompiledFunctionRegistry.CompiledArtifact artifact = BaselineCompiledFunctionRegistry.getInstance().getArtifact(id);
+        if (artifact == null) {
             return fallback;
         }
 
-        SourcedCommandAction<T> action = new BaselineCompiledAction<>(program, BaselineCompiler.analyze(
-                asia.lira.mercury.ir.FunctionIrRegistry.getInstance().getParsed(id).orElseThrow()
-        ).build());
+        SourcedCommandAction<T> action = new BaselineCompiledAction<>(artifact);
         return new BaselineCompiledProcedure<>(id, List.of(action));
     }
 }

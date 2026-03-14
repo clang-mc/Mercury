@@ -73,13 +73,18 @@ public abstract class MixinFunctionLoader {
                         Identifier functionId = FINDER.toResourceId(resourceId);
                         List<String> lines = mercury$readLines(resourceEntry.getValue());
                         rawSources.put(functionId, lines);
+                    }
+
+                    GlobalCompilationCoordinator.getInstance().beginReload(rawSources);
+
+                    for (Entry<Identifier, List<String>> sourceEntry : rawSources.entrySet()) {
+                        Identifier functionId = sourceEntry.getKey();
+                        List<String> lines = sourceEntry.getValue();
                         functionFutures.put(functionId, CompletableFuture.supplyAsync(
                                 () -> CommandFunction.create(functionId, this.commandDispatcher, source, lines),
                                 prepareExecutor
                         ));
                     }
-
-                    GlobalCompilationCoordinator.getInstance().beginReload(rawSources);
                     CompletableFuture<?>[] all = functionFutures.values().toArray(new CompletableFuture[0]);
                     return CompletableFuture.allOf(all).handle((unused, ex) -> new PreparedReload(rawSources, functionFutures));
                 });

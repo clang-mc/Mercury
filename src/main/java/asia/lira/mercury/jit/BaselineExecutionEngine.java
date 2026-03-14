@@ -2,65 +2,36 @@ package asia.lira.mercury.jit;
 
 import asia.lira.mercury.Mercury;
 import net.minecraft.command.CommandExecutionContext;
-import net.minecraft.command.Frame;
 import net.minecraft.scoreboard.ReadableScoreboardScore;
 import net.minecraft.scoreboard.ScoreHolder;
 import net.minecraft.scoreboard.Scoreboard;
 import net.minecraft.scoreboard.ScoreboardObjective;
-import net.minecraft.server.command.AbstractServerCommandSource;
+import net.minecraft.util.Identifier;
 
 public final class BaselineExecutionEngine {
     private BaselineExecutionEngine() {
     }
 
-    public static <T extends AbstractServerCommandSource<T>> ExecutionOutcome execute(
-            BaselineProgram program,
-            ExecutionFrame frame,
-            T source,
-            CommandExecutionContext<T> context
-    ) {
-        BaselineProgram currentProgram = program;
-
-        while (true) {
-            for (BaselineInstruction instruction : currentProgram.instructions()) {
-                context.decrementCommandQuota();
-                switch (instruction.opCode()) {
-                    case SET_CONST -> writeSlot(frame, instruction.primarySlot(), instruction.immediate());
-                    case ADD_CONST -> writeSlot(frame, instruction.primarySlot(), readSlot(frame, instruction.primarySlot()) + instruction.immediate());
-                    case GET -> readSlot(frame, instruction.primarySlot());
-                    case RESET -> resetSlot(frame, instruction.primarySlot());
-                    case OPERATION -> runOperation(frame, instruction);
-                    case CALL -> {
-                        BaselineProgram callee = BaselineCompiledFunctionRegistry.getInstance().get(instruction.targetFunction());
-                        if (callee == null) {
-                            return ExecutionOutcome.fallback();
-                        }
-                        ExecutionOutcome outcome = execute(callee, frame, source, context);
-                        if (outcome.mode() == ExecutionOutcome.Mode.FALLBACK) {
-                            return outcome;
-                        }
-                    }
-                    case JUMP -> {
-                        BaselineProgram jumpTarget = BaselineCompiledFunctionRegistry.getInstance().get(instruction.targetFunction());
-                        if (jumpTarget == null) {
-                            return ExecutionOutcome.fallback();
-                        }
-                        currentProgram = jumpTarget;
-                        continue;
-                    }
-                    case RETURN_VALUE -> {
-                        return ExecutionOutcome.returnValue(instruction.immediate());
-                    }
-                }
-            }
-            return ExecutionOutcome.completed();
-        }
+    public static void opSetConst(ExecutionFrame frame, int slotId, int value) {
+        writeSlot(frame, slotId, value);
     }
 
-    private static void runOperation(ExecutionFrame frame, BaselineInstruction instruction) {
-        int left = readSlot(frame, instruction.primarySlot());
-        int right = readSlot(frame, instruction.secondarySlot());
-        int result = switch (instruction.operation()) {
+    public static void opAddConst(ExecutionFrame frame, int slotId, int delta) {
+        writeSlot(frame, slotId, readSlot(frame, slotId) + delta);
+    }
+
+    public static void opGet(ExecutionFrame frame, int slotId) {
+        readSlot(frame, slotId);
+    }
+
+    public static void opReset(ExecutionFrame frame, int slotId) {
+        resetSlot(frame, slotId);
+    }
+
+    public static void opOperation(ExecutionFrame frame, int primarySlot, int secondarySlot, String operation) {
+        int left = readSlot(frame, primarySlot);
+        int right = readSlot(frame, secondarySlot);
+        int result = switch (operation) {
             case "=" -> right;
             case "+=" -> left + right;
             case "-=" -> left - right;
@@ -70,13 +41,40 @@ public final class BaselineExecutionEngine {
             case "<" -> Math.min(left, right);
             case ">" -> Math.max(left, right);
             case "><" -> right;
-            default -> throw new IllegalStateException("Unexpected scoreboard operation: " + instruction.operation());
+            default -> throw new IllegalStateException("Unexpected scoreboard operation: " + operation);
         };
 
-        if ("><".equals(instruction.operation())) {
-            writeSlot(frame, instruction.secondarySlot(), left);
+        if ("><".equals(operation)) {
+            writeSlot(frame, secondarySlot, left);
         }
-        writeSlot(frame, instruction.primarySlot(), result);
+        writeSlot(frame, primarySlot, result);
+    }
+
+    public static void opCall(String functionId, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
+        ExecutionOutcome outcome = invokeCompiled(Identifier.of(functionId), frame, source, context);
+        if (outcome.mode() == ExecutionOutcome.Mode.FALLBACK) {
+            throw new IllegalStateException("Missing compiled callee for " + functionId);
+        }
+    }
+
+    public static ExecutionOutcome opJump(String functionId, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
+        return invokeCompiled(Identifier.of(functionId), frame, source, context);
+    }
+
+    public static ExecutionOutcome completed() {
+        return ExecutionOutcome.completed();
+    }
+
+    public static ExecutionOutcome returnValue(int returnValue) {
+        return ExecutionOutcome.returnValue(returnValue);
+    }
+
+    private static ExecutionOutcome invokeCompiled(Identifier id, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
+        BaselineCompiledFunctionRegistry.CompiledArtifact artifact = BaselineCompiledFunctionRegistry.getInstance().getArtifact(id);
+        if (artifact == null) {
+            return ExecutionOutcome.fallback();
+        }
+        return artifact.compiledFunction().invoke(frame, source, context);
     }
 
     private static int readSlot(ExecutionFrame frame, int slotId) {

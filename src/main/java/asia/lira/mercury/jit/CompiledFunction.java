@@ -1,6 +1,8 @@
 package asia.lira.mercury.jit;
 
+import net.minecraft.command.CommandExecutionContext;
+
 @FunctionalInterface
 public interface CompiledFunction {
-    int invoke(ExecutionFrame frame) throws Throwable;
+    BaselineExecutionEngine.ExecutionOutcome invoke(ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable;
 }
