@@ -29,25 +29,7 @@ public final class BaselineExecutionEngine {
     }
 
     public static void opOperation(ExecutionFrame frame, int primarySlot, int secondarySlot, String operation) {
-        int left = readSlot(frame, primarySlot);
-        int right = readSlot(frame, secondarySlot);
-        int result = switch (operation) {
-            case "=" -> right;
-            case "+=" -> left + right;
-            case "-=" -> left - right;
-            case "*=" -> left * right;
-            case "/=" -> right == 0 ? 0 : left / right;
-            case "%=" -> right == 0 ? 0 : left % right;
-            case "<" -> Math.min(left, right);
-            case ">" -> Math.max(left, right);
-            case "><" -> right;
-            default -> throw new IllegalStateException("Unexpected scoreboard operation: " + operation);
-        };
-
-        if ("><".equals(operation)) {
-            writeSlot(frame, secondarySlot, left);
-        }
-        writeSlot(frame, primarySlot, result);
+        applyOperation(frame, primarySlot, secondarySlot, operation);
     }
 
     public static void opCall(String functionId, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
@@ -69,15 +51,11 @@ public final class BaselineExecutionEngine {
         return ExecutionOutcome.returnValue(returnValue);
     }
 
-    private static ExecutionOutcome invokeCompiled(Identifier id, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
-        BaselineCompiledFunctionRegistry.CompiledArtifact artifact = BaselineCompiledFunctionRegistry.getInstance().getArtifact(id);
-        if (artifact == null) {
-            return ExecutionOutcome.fallback();
-        }
-        return artifact.compiledFunction().invoke(frame, source, context);
+    public static ExecutionOutcome invokeCompiled(String functionId, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
+        return invokeCompiled(Identifier.of(functionId), frame, source, context);
     }
 
-    private static int readSlot(ExecutionFrame frame, int slotId) {
+    public static int readSlot(ExecutionFrame frame, int slotId) {
         if (frame.isLoaded(slotId)) {
             return frame.getSlotValue(slotId);
         }
@@ -100,11 +78,7 @@ public final class BaselineExecutionEngine {
         return value;
     }
 
-    private static void writeSlot(ExecutionFrame frame, int slotId, int value) {
-        frame.setSlotValue(slotId, value);
-    }
-
-    private static void resetSlot(ExecutionFrame frame, int slotId) {
+    public static void resetSlot(ExecutionFrame frame, int slotId) {
         frame.invalidateSlot(slotId);
 
         OptimizedSlotRegistry.SlotMetadata metadata = JitPreparationRegistry.getInstance().slotRegistry().getSlot(slotId);
@@ -118,6 +92,40 @@ public final class BaselineExecutionEngine {
             return;
         }
         scoreboard.removeScore(ScoreHolder.fromName(metadata.key().holderName()), objective);
+    }
+
+    public static void applyOperation(ExecutionFrame frame, int primarySlot, int secondarySlot, String operation) {
+        int left = readSlot(frame, primarySlot);
+        int right = readSlot(frame, secondarySlot);
+        int result = switch (operation) {
+            case "=" -> right;
+            case "+=" -> left + right;
+            case "-=" -> left - right;
+            case "*=" -> left * right;
+            case "/=" -> right == 0 ? 0 : left / right;
+            case "%=" -> right == 0 ? 0 : left % right;
+            case "<" -> Math.min(left, right);
+            case ">" -> Math.max(left, right);
+            case "><" -> right;
+            default -> throw new IllegalStateException("Unexpected scoreboard operation: " + operation);
+        };
+
+        if ("><".equals(operation)) {
+            writeSlot(frame, secondarySlot, left);
+        }
+        writeSlot(frame, primarySlot, result);
+    }
+
+    private static ExecutionOutcome invokeCompiled(Identifier id, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
+        BaselineCompiledFunctionRegistry.CompiledArtifact artifact = BaselineCompiledFunctionRegistry.getInstance().getArtifact(id);
+        if (artifact == null) {
+            return ExecutionOutcome.fallback();
+        }
+        return artifact.compiledFunction().invoke(frame, source, context);
+    }
+
+    private static void writeSlot(ExecutionFrame frame, int slotId, int value) {
+        frame.setSlotValue(slotId, value);
     }
 
     public record ExecutionOutcome(
