@@ -4,7 +4,11 @@
   "package": "asia.lira.mercury.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "MixinFunctionBuilder"
+    "MixinCommandFunctionManager",
+    "MixinFunctionBuilder",
+    "accessor.MixinCommandContextAccessor",
+    "accessor.MixinMacroVariableLineAccessor",
+    "accessor.MixinSingleCommandActionAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

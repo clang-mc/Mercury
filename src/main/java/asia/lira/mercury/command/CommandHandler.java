@@ -1,8 +1,10 @@
 package asia.lira.mercury.command;
 
 import asia.lira.mercury.Mercury;
+import asia.lira.mercury.ir.FunctionIrDumper;
+import asia.lira.mercury.ir.FunctionIrExporter;
+import asia.lira.mercury.ir.FunctionIrRegistry;
 import com.mojang.brigadier.CommandDispatcher;
-import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandRegistryAccess;
 import net.minecraft.command.DataCommandStorage;
@@ -15,6 +17,8 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import org.jetbrains.annotations.NotNull;
+
+import java.util.List;
 
 import static net.minecraft.server.command.CommandManager.literal;
 
@@ -29,11 +33,92 @@ public class CommandHandler implements CommandRegistrationCallback {
         return storage.get(STORAGE).getList("heap", NbtElement.INT_TYPE);
     }
 
+    private static int sendLines(ServerCommandSource source, List<String> lines) {
+        for (String line : lines) {
+            source.sendFeedback(() -> Text.literal(line), false);
+        }
+        return lines.size();
+    }
+
+    private static int dumpRegistry(ServerCommandSource source) {
+        FunctionIrRegistry registry = FunctionIrRegistry.getInstance();
+        return sendLines(source, FunctionIrDumper.dumpRegistrySummary(registry, 20));
+    }
+
+    private static int dumpAll(ServerCommandSource source) {
+        try {
+            FunctionIrRegistry registry = FunctionIrRegistry.getInstance();
+            FunctionIrExporter.ExportResult parsedResult = FunctionIrExporter.exportParsed(
+                    registry,
+                    source.getServer().getRunDirectory()
+            );
+            FunctionIrExporter.ExportResult semanticResult = FunctionIrExporter.exportSemantic(
+                    registry,
+                    source.getServer().getRunDirectory()
+            );
+            source.sendFeedback(() -> Text.literal(
+                    "Exported parsed=" + parsedResult.exportedCount()
+                            + " to " + parsedResult.outputDirectory()
+                            + ", semantic=" + semanticResult.exportedCount()
+                            + " to " + semanticResult.outputDirectory()
+            ), false);
+            return parsedResult.exportedCount() + semanticResult.exportedCount();
+        } catch (Exception e) {
+            source.sendError(Text.literal("Failed to export IR: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int dumpParsed(ServerCommandSource source) {
+        try {
+            FunctionIrExporter.ExportResult result = FunctionIrExporter.exportParsed(
+                    FunctionIrRegistry.getInstance(),
+                    source.getServer().getRunDirectory()
+            );
+            source.sendFeedback(() -> Text.literal(
+                    "Exported " + result.exportedCount() + " parsed IR files to " + result.outputDirectory()
+            ), false);
+            return result.exportedCount();
+        } catch (Exception e) {
+            source.sendError(Text.literal("Failed to export parsed IR: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int dumpSemantic(ServerCommandSource source) {
+        try {
+            FunctionIrExporter.ExportResult result = FunctionIrExporter.exportSemantic(
+                    FunctionIrRegistry.getInstance(),
+                    source.getServer().getRunDirectory()
+            );
+            source.sendFeedback(() -> Text.literal(
+                    "Exported " + result.exportedCount() + " semantic IR files to " + result.outputDirectory()
+            ), false);
+            return result.exportedCount();
+        } catch (Exception e) {
+            source.sendError(Text.literal("Failed to export semantic IR: " + e.getMessage()));
+            return 0;
+        }
+    }
+
     @Override
     public void register(@NotNull CommandDispatcher<ServerCommandSource> dispatcher,
                          CommandRegistryAccess access, CommandManager.RegistrationEnvironment environment) {
-        dispatcher.register(literal("mcfp")
-                .then(literal("syscall").executes(context -> {
+        dispatcher.register(literal("mercury")
+                .requires(source -> source.hasPermissionLevel(2))
+                .then(literal("dump")
+                        .executes(context -> dumpAll(context.getSource()))
+                        .then(literal("parsed")
+                                .executes(context -> dumpParsed(context.getSource()))
+                        )
+                        .then(literal("semantic")
+                                .executes(context -> dumpSemantic(context.getSource()))
+                        )
+                )
+        );
+
+        dispatcher.register(literal("syscall")
+                .executes(context -> {
                     ServerScoreboard scoreboard = Mercury.SERVER.getScoreboard();
                     ScoreboardObjective vmRegs = scoreboard.getNullableObjective("vm_regs");
                     ScoreboardScore rax = (ScoreboardScore) scoreboard.getScore(RAX, vmRegs);
@@ -87,18 +172,7 @@ public class CommandHandler implements CommandRegistrationCallback {
                             return -1;
                         }
                     }
-                }))
-        );
-
-        dispatcher.register(literal("mercury")
-                .then(literal("test1").executes(context -> {
-                    System.out.println(Mercury.interpreter.execute(context.getSource(), "help", new String[]{"help"}));
-                    return 1;
-                }))
-                .then(literal("test2").executes(context -> {
-                    System.out.println(Mercury.interpreter.execute(context.getSource(), "say \"Hello, World!\"", new String[]{"say", "\"Hello, World!\""}));
-                    return 1;
-                }))
+                })
         );
     }
 }

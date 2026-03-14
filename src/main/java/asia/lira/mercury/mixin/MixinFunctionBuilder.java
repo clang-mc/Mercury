@@ -1,6 +1,8 @@
 package asia.lira.mercury.mixin;
 
 import asia.lira.mercury.impl.FastMacro;
+import asia.lira.mercury.ir.FunctionIrCompiler;
+import asia.lira.mercury.ir.FunctionIrRegistry;
 import net.minecraft.command.SourcedCommandAction;
 import net.minecraft.server.command.AbstractServerCommandSource;
 import net.minecraft.server.function.CommandFunction;
@@ -30,6 +32,9 @@ public class MixinFunctionBuilder<T extends AbstractServerCommandSource<T>> {
      */
     @Overwrite
     public CommandFunction<T> toCommandFunction(Identifier id) {
+        FunctionIrRegistry.getInstance().registerParsed(
+                FunctionIrCompiler.compile(id, this.actions, this.macroLines, this.usedVariables)
+        );
         return this.macroLines != null ? new FastMacro<>(id, this.macroLines, this.usedVariables) : new ExpandedMacro<>(id, this.actions);
     }
 }
