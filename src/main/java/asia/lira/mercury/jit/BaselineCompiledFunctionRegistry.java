@@ -5,8 +5,8 @@ import net.minecraft.util.Identifier;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,9 +41,10 @@ public final class BaselineCompiledFunctionRegistry {
 
         artifacts.clear();
         JumpGraph jumpGraph = JumpGraph.build(compiledPrograms);
-        for (Map.Entry<Identifier, BaselineProgram> entry : compiledPrograms.entrySet()) {
-            JumpGraph.CompilationUnit unit = jumpGraph.unitFor(entry.getKey());
-            artifacts.put(entry.getKey(), BaselineBytecodeCompiler.compile(entry.getValue(), unit, collectRequiredSlots(unit)));
+        CallGraph callGraph = CallGraph.build(compiledPrograms);
+        Map<Identifier, Boolean> visiting = new LinkedHashMap<>();
+        for (Identifier id : compiledPrograms.keySet()) {
+            compileArtifact(id, compiledPrograms, jumpGraph, callGraph, visiting);
         }
     }
 
@@ -96,6 +97,89 @@ public final class BaselineCompiledFunctionRegistry {
         return true;
     }
 
+    private @Nullable CompiledArtifact compileArtifact(
+            Identifier id,
+            Map<Identifier, BaselineProgram> compiledPrograms,
+            JumpGraph jumpGraph,
+            CallGraph callGraph,
+            Map<Identifier, Boolean> visiting
+    ) {
+        CompiledArtifact existing = artifacts.get(id);
+        if (existing != null) {
+            return existing;
+        }
+
+        if (Boolean.TRUE.equals(visiting.get(id))) {
+            return null;
+        }
+
+        BaselineProgram program = compiledPrograms.get(id);
+        if (program == null) {
+            return null;
+        }
+
+        visiting.put(id, true);
+        JumpGraph.CompilationUnit unit = jumpGraph.unitFor(id);
+        Set<Identifier> localPrograms = new LinkedHashSet<>();
+        for (BaselineProgram localProgram : unit.programs()) {
+            localPrograms.add(localProgram.id());
+        }
+
+        for (Identifier dependency : collectExternalDependencies(unit, localPrograms)) {
+            if (callGraph.areInSameComponent(id, dependency)) {
+                continue;
+            }
+            compileArtifact(dependency, compiledPrograms, jumpGraph, callGraph, visiting);
+        }
+
+        List<BaselineBytecodeCompiler.DirectCallee> directCallees = collectDirectCallees(unit, localPrograms, callGraph, id);
+        CompiledArtifact artifact = BaselineBytecodeCompiler.compile(program, unit, collectRequiredSlots(unit), directCallees);
+        artifacts.put(id, artifact);
+        visiting.remove(id);
+        return artifact;
+    }
+
+    private Set<Identifier> collectExternalDependencies(JumpGraph.CompilationUnit unit, Set<Identifier> localPrograms) {
+        Set<Identifier> dependencies = new LinkedHashSet<>();
+        for (BaselineProgram program : unit.programs()) {
+            for (Identifier dependency : program.dependencies()) {
+                if (!localPrograms.contains(dependency)) {
+                    dependencies.add(dependency);
+                }
+            }
+        }
+        return dependencies;
+    }
+
+    private List<BaselineBytecodeCompiler.DirectCallee> collectDirectCallees(
+            JumpGraph.CompilationUnit unit,
+            Set<Identifier> localPrograms,
+            CallGraph callGraph,
+            Identifier entryId
+    ) {
+        Set<Identifier> seen = new LinkedHashSet<>();
+        List<BaselineBytecodeCompiler.DirectCallee> directCallees = new java.util.ArrayList<>();
+        int callerComponent = callGraph.componentOf(entryId);
+
+        for (BaselineProgram program : unit.programs()) {
+            for (Identifier dependency : program.dependencies()) {
+                if (localPrograms.contains(dependency) || !seen.add(dependency)) {
+                    continue;
+                }
+                if (callGraph.componentOf(dependency) == callerComponent) {
+                    continue;
+                }
+
+                CompiledArtifact artifact = artifacts.get(dependency);
+                if (artifact != null) {
+                    directCallees.add(new BaselineBytecodeCompiler.DirectCallee(dependency, artifact.compiledFunction(), artifact.requiredSlots()));
+                }
+            }
+        }
+
+        return List.copyOf(directCallees);
+    }
+
     public record CompiledArtifact(
             BaselineProgram program,
             CompiledFunction compiledFunction,
@@ -118,6 +202,35 @@ public final class BaselineCompiledFunctionRegistry {
             }
         }
         return slotIds.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    private record CallGraph(Map<Identifier, Integer> components) {
+        static CallGraph build(Map<Identifier, BaselineProgram> programs) {
+            Map<Identifier, List<Identifier>> edges = new LinkedHashMap<>();
+            for (Map.Entry<Identifier, BaselineProgram> entry : programs.entrySet()) {
+                edges.put(entry.getKey(), entry.getValue().dependencies().stream()
+                        .filter(programs::containsKey)
+                        .toList());
+            }
+
+            Tarjan tarjan = new Tarjan(edges);
+            Map<Identifier, Integer> components = new LinkedHashMap<>();
+            List<List<Identifier>> groups = tarjan.components();
+            for (int index = 0; index < groups.size(); index++) {
+                for (Identifier id : groups.get(index)) {
+                    components.put(id, index);
+                }
+            }
+            return new CallGraph(components);
+        }
+
+        boolean areInSameComponent(Identifier left, Identifier right) {
+            return componentOf(left) == componentOf(right);
+        }
+
+        int componentOf(Identifier id) {
+            return components.getOrDefault(id, -1);
+        }
     }
 
     record JumpGraph(Map<Identifier, CompilationUnit> units) {
@@ -156,56 +269,56 @@ public final class BaselineCompiledFunctionRegistry {
                 return -1;
             }
         }
+    }
 
-        private static final class Tarjan {
-            private final Map<Identifier, List<Identifier>> edges;
-            private final Map<Identifier, Integer> indices = new LinkedHashMap<>();
-            private final Map<Identifier, Integer> lowLinks = new LinkedHashMap<>();
-            private final java.util.ArrayDeque<Identifier> stack = new java.util.ArrayDeque<>();
-            private final java.util.Set<Identifier> onStack = new java.util.HashSet<>();
-            private final java.util.List<java.util.List<Identifier>> components = new java.util.ArrayList<>();
-            private int nextIndex;
+    private static final class Tarjan {
+        private final Map<Identifier, List<Identifier>> edges;
+        private final Map<Identifier, Integer> indices = new LinkedHashMap<>();
+        private final Map<Identifier, Integer> lowLinks = new LinkedHashMap<>();
+        private final java.util.ArrayDeque<Identifier> stack = new java.util.ArrayDeque<>();
+        private final java.util.Set<Identifier> onStack = new java.util.HashSet<>();
+        private final java.util.List<java.util.List<Identifier>> components = new java.util.ArrayList<>();
+        private int nextIndex;
 
-            private Tarjan(Map<Identifier, List<Identifier>> edges) {
-                this.edges = edges;
-                for (Identifier id : edges.keySet()) {
-                    if (!indices.containsKey(id)) {
-                        strongConnect(id);
-                    }
+        private Tarjan(Map<Identifier, List<Identifier>> edges) {
+            this.edges = edges;
+            for (Identifier id : edges.keySet()) {
+                if (!indices.containsKey(id)) {
+                    strongConnect(id);
+                }
+            }
+        }
+
+        private void strongConnect(Identifier id) {
+            indices.put(id, nextIndex);
+            lowLinks.put(id, nextIndex);
+            nextIndex++;
+            stack.push(id);
+            onStack.add(id);
+
+            for (Identifier target : edges.getOrDefault(id, List.of())) {
+                if (!indices.containsKey(target)) {
+                    strongConnect(target);
+                    lowLinks.put(id, Math.min(lowLinks.get(id), lowLinks.get(target)));
+                } else if (onStack.contains(target)) {
+                    lowLinks.put(id, Math.min(lowLinks.get(id), indices.get(target)));
                 }
             }
 
-            private void strongConnect(Identifier id) {
-                indices.put(id, nextIndex);
-                lowLinks.put(id, nextIndex);
-                nextIndex++;
-                stack.push(id);
-                onStack.add(id);
-
-                for (Identifier target : edges.getOrDefault(id, List.of())) {
-                    if (!indices.containsKey(target)) {
-                        strongConnect(target);
-                        lowLinks.put(id, Math.min(lowLinks.get(id), lowLinks.get(target)));
-                    } else if (onStack.contains(target)) {
-                        lowLinks.put(id, Math.min(lowLinks.get(id), indices.get(target)));
-                    }
-                }
-
-                if (lowLinks.get(id).equals(indices.get(id))) {
-                    java.util.List<Identifier> component = new java.util.ArrayList<>();
-                    Identifier value;
-                    do {
-                        value = stack.pop();
-                        onStack.remove(value);
-                        component.add(value);
-                    } while (!value.equals(id));
-                    components.add(List.copyOf(component));
-                }
+            if (lowLinks.get(id).equals(indices.get(id))) {
+                java.util.List<Identifier> component = new java.util.ArrayList<>();
+                Identifier value;
+                do {
+                    value = stack.pop();
+                    onStack.remove(value);
+                    component.add(value);
+                } while (!value.equals(id));
+                components.add(List.copyOf(component));
             }
+        }
 
-            private List<List<Identifier>> components() {
-                return List.copyOf(components);
-            }
+        private List<List<Identifier>> components() {
+            return List.copyOf(components);
         }
     }
 }

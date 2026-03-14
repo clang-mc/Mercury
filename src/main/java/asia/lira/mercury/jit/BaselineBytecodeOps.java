@@ -8,7 +8,10 @@ import org.objectweb.asm.Type;
 public final class BaselineBytecodeOps {
     private static final String FRAME_INTERNAL = Type.getInternalName(ExecutionFrame.class);
     private static final String RUNTIME_INTERNAL = Type.getInternalName(BaselineExecutionEngine.class);
+    private static final String COMPILED_FUNCTION_INTERNAL = Type.getInternalName(CompiledFunction.class);
     private static final String OUTCOME_DESC = Type.getDescriptor(BaselineExecutionEngine.ExecutionOutcome.class);
+    private static final String OUTCOME_INTERNAL = Type.getInternalName(BaselineExecutionEngine.ExecutionOutcome.class);
+    private static final String OUTCOME_MODE_INTERNAL = Type.getInternalName(BaselineExecutionEngine.ExecutionOutcome.Mode.class);
     private static final String CONTEXT_DESC = Type.getDescriptor(net.minecraft.command.CommandExecutionContext.class);
 
     private BaselineBytecodeOps() {
@@ -91,20 +94,52 @@ public final class BaselineBytecodeOps {
         visitor.visitInsn(Opcodes.ARETURN);
     }
 
-    public static void buildReturnValue(MethodVisitor visitor, int returnValue) {
-        pushInt(visitor, returnValue);
+    public static void buildDirectCall(MethodVisitor visitor, String ownerInternalName, int calleeIndex, boolean returnOutcome) {
+        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
+        visitor.visitFieldInsn(Opcodes.GETFIELD, ownerInternalName, "calleeSlots", "[[I");
+        pushInt(visitor, calleeIndex);
+        visitor.visitInsn(Opcodes.AALOAD);
+        visitor.visitMethodInsn(Opcodes.INVOKESTATIC, RUNTIME_INTERNAL, "ensureLoaded", "(L" + FRAME_INTERNAL + ";[I)V", false);
+
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
+        visitor.visitFieldInsn(Opcodes.GETFIELD, ownerInternalName, "callees", "[L" + COMPILED_FUNCTION_INTERNAL + ";");
+        pushInt(visitor, calleeIndex);
+        visitor.visitInsn(Opcodes.AALOAD);
+        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 2);
+        visitor.visitVarInsn(Opcodes.ALOAD, 3);
         visitor.visitMethodInsn(
-                Opcodes.INVOKESTATIC,
-                RUNTIME_INTERNAL,
-                "returnValue",
-                "(I)" + OUTCOME_DESC,
-                false
+                Opcodes.INVOKEINTERFACE,
+                COMPILED_FUNCTION_INTERNAL,
+                "invoke",
+                "(L" + FRAME_INTERNAL + ";Ljava/lang/Object;" + CONTEXT_DESC + ")" + OUTCOME_DESC,
+                true
         );
+
+        if (returnOutcome) {
+            visitor.visitInsn(Opcodes.ARETURN);
+        } else {
+            visitor.visitInsn(Opcodes.POP);
+        }
+    }
+
+    public static void buildReturnValue(MethodVisitor visitor, int returnValue) {
+        visitor.visitTypeInsn(Opcodes.NEW, OUTCOME_INTERNAL);
+        visitor.visitInsn(Opcodes.DUP);
+        visitor.visitFieldInsn(Opcodes.GETSTATIC, OUTCOME_MODE_INTERNAL, "RETURN", "L" + OUTCOME_MODE_INTERNAL + ";");
+        pushInt(visitor, returnValue);
+        visitor.visitMethodInsn(Opcodes.INVOKESPECIAL, OUTCOME_INTERNAL, "<init>", "(L" + OUTCOME_MODE_INTERNAL + ";I)V", false);
         visitor.visitInsn(Opcodes.ARETURN);
     }
 
     public static void buildCompleted(MethodVisitor visitor) {
-        visitor.visitMethodInsn(Opcodes.INVOKESTATIC, RUNTIME_INTERNAL, "completed", "()" + OUTCOME_DESC, false);
+        visitor.visitTypeInsn(Opcodes.NEW, OUTCOME_INTERNAL);
+        visitor.visitInsn(Opcodes.DUP);
+        visitor.visitFieldInsn(Opcodes.GETSTATIC, OUTCOME_MODE_INTERNAL, "COMPLETE", "L" + OUTCOME_MODE_INTERNAL + ";");
+        visitor.visitInsn(Opcodes.ICONST_0);
+        visitor.visitMethodInsn(Opcodes.INVOKESPECIAL, OUTCOME_INTERNAL, "<init>", "(L" + OUTCOME_MODE_INTERNAL + ";I)V", false);
         visitor.visitInsn(Opcodes.ARETURN);
     }
 
