@@ -8,16 +8,9 @@ import net.minecraft.scoreboard.Scoreboard;
 import net.minecraft.scoreboard.ScoreboardObjective;
 import net.minecraft.util.Identifier;
 
+@SuppressWarnings("unused")
 public final class BaselineExecutionEngine {
     private BaselineExecutionEngine() {
-    }
-
-    public static void opSetConst(ExecutionFrame frame, int slotId, int value) {
-        writeSlot(frame, slotId, value);
-    }
-
-    public static void opAddConst(ExecutionFrame frame, int slotId, int delta) {
-        writeSlot(frame, slotId, readSlot(frame, slotId) + delta);
     }
 
     public static void opGet(ExecutionFrame frame, int slotId) {
@@ -53,6 +46,12 @@ public final class BaselineExecutionEngine {
 
     public static ExecutionOutcome invokeCompiled(String functionId, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
         return invokeCompiled(Identifier.of(functionId), frame, source, context);
+    }
+
+    public static void ensureLoaded(ExecutionFrame frame, int[] slotIds) {
+        for (int slotId : slotIds) {
+            readSlot(frame, slotId);
+        }
     }
 
     public static int readSlot(ExecutionFrame frame, int slotId) {
@@ -98,7 +97,7 @@ public final class BaselineExecutionEngine {
         int left = readSlot(frame, primarySlot);
         int right = readSlot(frame, secondarySlot);
         int result = switch (operation) {
-            case "=" -> right;
+            case "=", "><" -> right;
             case "+=" -> left + right;
             case "-=" -> left - right;
             case "*=" -> left * right;
@@ -106,14 +105,13 @@ public final class BaselineExecutionEngine {
             case "%=" -> right == 0 ? 0 : left % right;
             case "<" -> Math.min(left, right);
             case ">" -> Math.max(left, right);
-            case "><" -> right;
             default -> throw new IllegalStateException("Unexpected scoreboard operation: " + operation);
         };
 
         if ("><".equals(operation)) {
-            writeSlot(frame, secondarySlot, left);
+            frame.setSlotValue(secondarySlot, left);
         }
-        writeSlot(frame, primarySlot, result);
+        frame.setSlotValue(primarySlot, result);
     }
 
     private static ExecutionOutcome invokeCompiled(Identifier id, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
@@ -121,11 +119,8 @@ public final class BaselineExecutionEngine {
         if (artifact == null) {
             return ExecutionOutcome.fallback();
         }
+        ensureLoaded(frame, artifact.requiredSlots());
         return artifact.compiledFunction().invoke(frame, source, context);
-    }
-
-    private static void writeSlot(ExecutionFrame frame, int slotId, int value) {
-        frame.setSlotValue(slotId, value);
     }
 
     public record ExecutionOutcome(

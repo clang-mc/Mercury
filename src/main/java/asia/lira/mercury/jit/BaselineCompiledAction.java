@@ -29,6 +29,7 @@ public final class BaselineCompiledAction<T extends AbstractServerCommandSource<
         }
 
         try {
+            BaselineExecutionEngine.ensureLoaded(current, artifact.requiredSlots());
             BaselineExecutionEngine.ExecutionOutcome outcome = artifact.compiledFunction().invoke(current, source, context);
             flushDirtySlots(current);
             if (outcome.mode() == BaselineExecutionEngine.ExecutionOutcome.Mode.RETURN) {

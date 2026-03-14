@@ -5,9 +5,11 @@ import net.minecraft.util.Identifier;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class BaselineCompiledFunctionRegistry {
     private static final BaselineCompiledFunctionRegistry INSTANCE = new BaselineCompiledFunctionRegistry();
@@ -41,7 +43,7 @@ public final class BaselineCompiledFunctionRegistry {
         JumpGraph jumpGraph = JumpGraph.build(compiledPrograms);
         for (Map.Entry<Identifier, BaselineProgram> entry : compiledPrograms.entrySet()) {
             JumpGraph.CompilationUnit unit = jumpGraph.unitFor(entry.getKey());
-            artifacts.put(entry.getKey(), BaselineBytecodeCompiler.compile(entry.getValue(), unit));
+            artifacts.put(entry.getKey(), BaselineBytecodeCompiler.compile(entry.getValue(), unit, collectRequiredSlots(unit)));
         }
     }
 
@@ -98,8 +100,24 @@ public final class BaselineCompiledFunctionRegistry {
             BaselineProgram program,
             CompiledFunction compiledFunction,
             byte[] classBytes,
-            String internalClassName
+            String internalClassName,
+            int[] requiredSlots
     ) {
+    }
+
+    private static int[] collectRequiredSlots(JumpGraph.CompilationUnit unit) {
+        Set<Integer> slotIds = new LinkedHashSet<>();
+        for (BaselineProgram program : unit.programs()) {
+            for (BaselineInstruction instruction : program.instructions()) {
+                if (instruction.primarySlot() >= 0) {
+                    slotIds.add(instruction.primarySlot());
+                }
+                if (instruction.secondarySlot() >= 0) {
+                    slotIds.add(instruction.secondarySlot());
+                }
+            }
+        }
+        return slotIds.stream().mapToInt(Integer::intValue).toArray();
     }
 
     record JumpGraph(Map<Identifier, CompilationUnit> units) {

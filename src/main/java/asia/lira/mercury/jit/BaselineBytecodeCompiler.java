@@ -17,7 +17,8 @@ public final class BaselineBytecodeCompiler {
 
     public static BaselineCompiledFunctionRegistry.CompiledArtifact compile(
             BaselineProgram program,
-            BaselineCompiledFunctionRegistry.JumpGraph.CompilationUnit unit
+            BaselineCompiledFunctionRegistry.JumpGraph.CompilationUnit unit,
+            int[] requiredSlots
     ) {
         String internalName = generatedInternalName(program.id());
         byte[] classBytes = generateClass(program, internalName, unit);
@@ -26,7 +27,7 @@ public final class BaselineBytecodeCompiler {
             MethodHandles.Lookup hiddenLookup = MethodHandles.lookup().defineHiddenClass(classBytes, true);
             Class<?> hiddenClass = hiddenLookup.lookupClass();
             CompiledFunction compiledFunction = (CompiledFunction) hiddenClass.getDeclaredConstructor().newInstance();
-            return new BaselineCompiledFunctionRegistry.CompiledArtifact(program, compiledFunction, classBytes, internalName);
+            return new BaselineCompiledFunctionRegistry.CompiledArtifact(program, compiledFunction, classBytes, internalName, requiredSlots);
         } catch (Throwable throwable) {
             throw new RuntimeException("Failed to define compiled class for " + program.id(), throwable);
         }
