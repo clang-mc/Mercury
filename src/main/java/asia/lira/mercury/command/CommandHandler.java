@@ -4,6 +4,7 @@ import asia.lira.mercury.Mercury;
 import asia.lira.mercury.ir.FunctionIrDumper;
 import asia.lira.mercury.ir.FunctionIrExporter;
 import asia.lira.mercury.ir.FunctionIrRegistry;
+import asia.lira.mercury.jit.JitPreparationExporter;
 import com.mojang.brigadier.CommandDispatcher;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandRegistryAccess;
@@ -56,13 +57,18 @@ public class CommandHandler implements CommandRegistrationCallback {
                     registry,
                     source.getServer().getRunDirectory()
             );
+            JitPreparationExporter.ExportResult preparedResult = JitPreparationExporter.exportPrepared(
+                    source.getServer().getRunDirectory()
+            );
             source.sendFeedback(() -> Text.literal(
                     "Exported parsed=" + parsedResult.exportedCount()
                             + " to " + parsedResult.outputDirectory()
                             + ", semantic=" + semanticResult.exportedCount()
                             + " to " + semanticResult.outputDirectory()
+                            + ", prepared=" + preparedResult.exportedCount()
+                            + " to " + preparedResult.outputDirectory()
             ), false);
-            return parsedResult.exportedCount() + semanticResult.exportedCount();
+            return parsedResult.exportedCount() + semanticResult.exportedCount() + preparedResult.exportedCount();
         } catch (Exception e) {
             source.sendError(Text.literal("Failed to export IR: " + e.getMessage()));
             return 0;
@@ -101,6 +107,21 @@ public class CommandHandler implements CommandRegistrationCallback {
         }
     }
 
+    private static int dumpPrepared(ServerCommandSource source) {
+        try {
+            JitPreparationExporter.ExportResult result = JitPreparationExporter.exportPrepared(
+                    source.getServer().getRunDirectory()
+            );
+            source.sendFeedback(() -> Text.literal(
+                    "Exported " + result.exportedCount() + " prepared JIT files to " + result.outputDirectory()
+            ), false);
+            return result.exportedCount();
+        } catch (Exception e) {
+            source.sendError(Text.literal("Failed to export prepared JIT: " + e.getMessage()));
+            return 0;
+        }
+    }
+
     @Override
     public void register(@NotNull CommandDispatcher<ServerCommandSource> dispatcher,
                          CommandRegistryAccess access, CommandManager.RegistrationEnvironment environment) {
@@ -113,6 +134,9 @@ public class CommandHandler implements CommandRegistrationCallback {
                         )
                         .then(literal("semantic")
                                 .executes(context -> dumpSemantic(context.getSource()))
+                        )
+                        .then(literal("prepared")
+                                .executes(context -> dumpPrepared(context.getSource()))
                         )
                 )
         );

@@ -1,5 +1,6 @@
 package asia.lira.mercury.ir;
 
+import asia.lira.mercury.jit.JitPreparationRegistry;
 import net.minecraft.server.function.CommandFunction;
 import net.minecraft.util.Identifier;
 import org.jetbrains.annotations.Nullable;
@@ -44,6 +45,7 @@ public final class FunctionIrRegistry {
         for (ParsedFunctionIr functionIr : parsedFunctions.values()) {
             semanticFunctions.put(functionIr.id(), buildSemantic(functionIr));
         }
+        JitPreparationRegistry.getInstance().rebuild(parsedFunctions.values());
     }
 
     public synchronized Optional<ParsedFunctionIr> getParsed(Identifier id) {

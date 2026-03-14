@@ -43,6 +43,7 @@ dependencies {
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
+    implementation 'org.ow2.asm:asm:9.7.1'
     implementation 'org.javassist:javassist:3.30.2-GA'
 
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"

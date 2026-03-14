@@ -6,6 +6,7 @@
   "mixins": [
     "MixinCommandFunctionManager",
     "MixinFunctionBuilder",
+    "MixinServerScoreboard",
     "accessor.MixinCommandContextAccessor",
     "accessor.MixinMacroVariableLineAccessor",
     "accessor.MixinSingleCommandActionAccessor"

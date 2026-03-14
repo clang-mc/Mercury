@@ -1,6 +1,7 @@
 package asia.lira.mercury;
 
 import asia.lira.mercury.command.CommandHandler;
+import asia.lira.mercury.jit.SynchronizationRuntime;
 import asia.lira.mercury.stat.JMXIntegration;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -15,6 +16,7 @@ public class Mercury implements ModInitializer {
     public void onInitialize() {
         CommandRegistrationCallback.EVENT.register(new CommandHandler());
         ServerLifecycleEvents.SERVER_STARTING.register(this::onServerStarting);
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> SynchronizationRuntime.getInstance().clear());
 
         JMXIntegration.initialize();
     }
