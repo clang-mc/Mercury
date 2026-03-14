@@ -1,5 +1,6 @@
 package asia.lira.mercury.ir;
 
+import asia.lira.mercury.jit.BaselineCompiledFunctionRegistry;
 import asia.lira.mercury.jit.JitPreparationRegistry;
 import net.minecraft.util.Identifier;
 
@@ -19,10 +20,11 @@ public final class FunctionIrDumper {
 
         List<String> lines = new ArrayList<>();
         lines.add("Mercury IR registry");
-        lines.add("parsed=" + registry.getParsedCount() + ", semantic=" + registry.getSemanticCount());
+        lines.add("raw=" + registry.getRawSourceCount() + ", parsed=" + registry.getParsedCount() + ", semantic=" + registry.getSemanticCount());
         lines.add("prepared=" + JitPreparationRegistry.getInstance().preparedFunctionCount()
                 + ", objectives=" + JitPreparationRegistry.getInstance().objectiveRegistry().count()
-                + ", slots=" + JitPreparationRegistry.getInstance().slotRegistry().count());
+                + ", slots=" + JitPreparationRegistry.getInstance().slotRegistry().count()
+                + ", baseline=" + BaselineCompiledFunctionRegistry.getInstance().count());
 
         int max = Math.min(limit, ids.size());
         for (int i = 0; i < max; i++) {

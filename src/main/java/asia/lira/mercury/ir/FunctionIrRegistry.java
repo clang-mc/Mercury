@@ -17,6 +17,7 @@ public final class FunctionIrRegistry {
 
     private final Map<Identifier, ParsedFunctionIr> parsedFunctions = new LinkedHashMap<>();
     private final Map<Identifier, SemanticFunctionIr> semanticFunctions = new LinkedHashMap<>();
+    private final Map<Identifier, List<String>> rawSources = new LinkedHashMap<>();
 
     private FunctionIrRegistry() {
     }
@@ -28,6 +29,30 @@ public final class FunctionIrRegistry {
     public synchronized void registerParsed(ParsedFunctionIr functionIr) {
         parsedFunctions.put(functionIr.id(), functionIr);
         semanticFunctions.remove(functionIr.id());
+    }
+
+    public synchronized void rebuildAll(
+            Map<Identifier, List<String>> nextRawSources,
+            Map<Identifier, ParsedFunctionIr> capturedParsed,
+            Map<Identifier, ? extends CommandFunction<?>> loadedFunctions
+    ) {
+        rawSources.clear();
+        rawSources.putAll(nextRawSources);
+
+        parsedFunctions.clear();
+        for (Map.Entry<Identifier, ? extends CommandFunction<?>> entry : loadedFunctions.entrySet()) {
+            ParsedFunctionIr parsed = capturedParsed.get(entry.getKey());
+            if (parsed != null) {
+                parsedFunctions.put(entry.getKey(), parsed);
+            }
+        }
+
+        semanticFunctions.clear();
+        for (ParsedFunctionIr functionIr : parsedFunctions.values()) {
+            semanticFunctions.put(functionIr.id(), buildSemantic(functionIr));
+        }
+        JitPreparationRegistry.getInstance().rebuild(parsedFunctions.values());
+        BaselineCompiledFunctionRegistry.getInstance().rebuild(parsedFunctions.values());
     }
 
     public synchronized void rebuildSemantic(Map<Identifier, ? extends CommandFunction<?>> loadedFunctions) {
@@ -64,6 +89,10 @@ public final class FunctionIrRegistry {
 
     public synchronized int getParsedCount() {
         return parsedFunctions.size();
+    }
+
+    public synchronized int getRawSourceCount() {
+        return rawSources.size();
     }
 
     public synchronized int getSemanticCount() {
