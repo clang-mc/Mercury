@@ -53,14 +53,28 @@ public final class BaselineCompiledFunctionRegistry {
         }
         Map<Identifier, Integer> callSiteCounts = collectCallSiteCounts(compiledPrograms, jumpGraph);
         Set<Identifier> classesWithSharedRequiredSlots = collectClassesWithSharedRequiredSlots(compiledPrograms.keySet(), requiredSlotsById, callSiteCounts);
+        Map<Identifier, SlotEffectSummary> effectSummaries = collectEffectSummaries(compiledPrograms);
+        BaselinePassPipeline passPipeline = new BaselinePassPipeline(List.of(new SlotPromotionPass()));
 
         Map<Identifier, BaselineBytecodeCompiler.CompiledClassData> compiledClasses = new LinkedHashMap<>();
+        Map<Identifier, LoweredUnit> optimizedUnits = new LinkedHashMap<>();
         for (Map.Entry<Identifier, BaselineProgram> entry : compiledPrograms.entrySet()) {
             JumpGraph.CompilationUnit unit = jumpGraph.unitFor(entry.getKey());
-            compiledClasses.put(entry.getKey(), BaselineBytecodeCompiler.compile(
-                    entry.getValue(),
+            LoweredUnit loweredUnit = BaselineLowerer.lower(
+                    entry.getKey(),
                     unit,
-                    requiredSlotsById.get(entry.getKey()),
+                    requiredSlotsById.get(entry.getKey())
+            );
+            LoweredUnit optimizedUnit = passPipeline.apply(loweredUnit, new BaselinePassContext(
+                    internalNames,
+                    callSiteCounts,
+                    requiredSlotsById,
+                    effectSummaries,
+                    collectUnitSlots(requiredSlotsById.get(entry.getKey()))
+            ));
+            optimizedUnits.put(entry.getKey(), optimizedUnit);
+            compiledClasses.put(entry.getKey(), BaselineBytecodeCompiler.compile(
+                    optimizedUnit,
                     internalNames,
                     callSiteCounts,
                     requiredSlotsById,
@@ -93,6 +107,7 @@ public final class BaselineCompiledFunctionRegistry {
                 BaselineBytecodeCompiler.CompiledClassData classData = entry.getValue();
                 artifacts.put(id, new CompiledArtifact(
                         compiledPrograms.get(id),
+                        optimizedUnits.get(id),
                         invokeHandle,
                         classData.classBytes(),
                         classData.internalName(),
@@ -207,8 +222,116 @@ public final class BaselineCompiledFunctionRegistry {
         return shared;
     }
 
+    private static Map<Identifier, SlotEffectSummary> collectEffectSummaries(Map<Identifier, BaselineProgram> programs) {
+        Map<Identifier, Set<Integer>> readSets = new LinkedHashMap<>();
+        Map<Identifier, Set<Integer>> writeSets = new LinkedHashMap<>();
+        Map<Identifier, Set<Integer>> resetSets = new LinkedHashMap<>();
+
+        for (Map.Entry<Identifier, BaselineProgram> entry : programs.entrySet()) {
+            Set<Integer> reads = new LinkedHashSet<>();
+            Set<Integer> writes = new LinkedHashSet<>();
+            Set<Integer> resets = new LinkedHashSet<>();
+
+            for (BaselineInstruction instruction : entry.getValue().instructions()) {
+                switch (instruction.opCode()) {
+                    case SET_CONST -> writes.add(instruction.primarySlot());
+                    case ADD_CONST -> {
+                        reads.add(instruction.primarySlot());
+                        writes.add(instruction.primarySlot());
+                    }
+                    case GET -> reads.add(instruction.primarySlot());
+                    case RESET -> {
+                        resets.add(instruction.primarySlot());
+                        writes.add(instruction.primarySlot());
+                    }
+                    case OPERATION -> {
+                        switch (instruction.operation()) {
+                            case "=" -> {
+                                reads.add(instruction.secondarySlot());
+                                writes.add(instruction.primarySlot());
+                            }
+                            case "><" -> {
+                                reads.add(instruction.primarySlot());
+                                reads.add(instruction.secondarySlot());
+                                writes.add(instruction.primarySlot());
+                                writes.add(instruction.secondarySlot());
+                            }
+                            default -> {
+                                reads.add(instruction.primarySlot());
+                                reads.add(instruction.secondarySlot());
+                                writes.add(instruction.primarySlot());
+                            }
+                        }
+                    }
+                    default -> {
+                    }
+                }
+            }
+
+            readSets.put(entry.getKey(), reads);
+            writeSets.put(entry.getKey(), writes);
+            resetSets.put(entry.getKey(), resets);
+        }
+
+        boolean changed;
+        do {
+            changed = false;
+            for (Map.Entry<Identifier, BaselineProgram> entry : programs.entrySet()) {
+                Set<Integer> reads = readSets.get(entry.getKey());
+                Set<Integer> writes = writeSets.get(entry.getKey());
+                for (BaselineInstruction instruction : entry.getValue().instructions()) {
+                    if (instruction.opCode() != BaselineInstruction.OpCode.CALL || instruction.targetFunction() == null) {
+                        continue;
+                    }
+                    SlotEffectSummary calleeSummary = summaryOf(instruction.targetFunction(), readSets, writeSets, resetSets);
+                    if (calleeSummary == null) {
+                        continue;
+                    }
+                    changed |= reads.addAll(calleeSummary.readSlots());
+                    changed |= writes.addAll(calleeSummary.writtenSlots());
+                    changed |= writes.addAll(calleeSummary.resetSlots());
+                }
+            }
+        } while (changed);
+
+        Map<Identifier, SlotEffectSummary> summaries = new LinkedHashMap<>();
+        for (Identifier id : programs.keySet()) {
+            summaries.put(id, new SlotEffectSummary(
+                    readSets.getOrDefault(id, Set.of()),
+                    writeSets.getOrDefault(id, Set.of()),
+                    resetSets.getOrDefault(id, Set.of())
+            ));
+        }
+        return summaries;
+    }
+
+    private static Set<Integer> collectUnitSlots(int[] requiredSlots) {
+        Set<Integer> slots = new LinkedHashSet<>();
+        for (int requiredSlot : requiredSlots) {
+            slots.add(requiredSlot);
+        }
+        return slots;
+    }
+
+    private static SlotEffectSummary summaryOf(
+            Identifier id,
+            Map<Identifier, Set<Integer>> readSets,
+            Map<Identifier, Set<Integer>> writeSets,
+            Map<Identifier, Set<Integer>> resetSets
+    ) {
+        if (!readSets.containsKey(id) && !writeSets.containsKey(id) && !resetSets.containsKey(id)) {
+            return null;
+        }
+        return new SlotEffectSummary(
+                readSets.getOrDefault(id, Set.of()),
+                writeSets.getOrDefault(id, Set.of()),
+                resetSets.getOrDefault(id, Set.of())
+        );
+    }
+
     public record CompiledArtifact(
             BaselineProgram program,
+            LoweredUnit optimizedUnit,
             MethodHandle invokeHandle,
             byte[] classBytes,
             String internalClassName,

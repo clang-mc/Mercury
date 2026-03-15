@@ -138,6 +138,132 @@ public final class BaselineBytecodeOps {
         }
     }
 
+    public static void buildInitializePromotedSlot(MethodVisitor visitor, int slotId, int localIndex) {
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
+        pushInt(visitor, slotId);
+        visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
+        visitor.visitVarInsn(Opcodes.ISTORE, localIndex);
+    }
+
+    public static void buildSpillPromotedSlot(MethodVisitor visitor, int slotId, int localIndex) {
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
+        pushInt(visitor, slotId);
+        visitor.visitVarInsn(Opcodes.ILOAD, localIndex);
+        visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "setSlotValue", "(II)V", false);
+    }
+
+    public static void buildReloadPromotedSlot(MethodVisitor visitor, int slotId, int localIndex) {
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
+        pushInt(visitor, slotId);
+        visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
+        visitor.visitVarInsn(Opcodes.ISTORE, localIndex);
+    }
+
+    public static void buildStorePromotedLocal(MethodVisitor visitor, int localIndex, int value) {
+        pushInt(visitor, value);
+        visitor.visitVarInsn(Opcodes.ISTORE, localIndex);
+    }
+
+    public static void buildAddPromotedLocal(MethodVisitor visitor, int localIndex, int delta) {
+        visitor.visitVarInsn(Opcodes.ILOAD, localIndex);
+        pushInt(visitor, delta);
+        visitor.visitInsn(Opcodes.IADD);
+        visitor.visitVarInsn(Opcodes.ISTORE, localIndex);
+    }
+
+    public static void buildGetPromotedLocal(MethodVisitor visitor, int localIndex) {
+        visitor.visitVarInsn(Opcodes.ILOAD, localIndex);
+        visitor.visitInsn(Opcodes.POP);
+    }
+
+    public static void buildPromotedOperation(MethodVisitor visitor, int primaryLocal, int secondaryLocal, String operation) {
+        switch (operation) {
+            case "=" -> {
+                visitor.visitVarInsn(Opcodes.ILOAD, secondaryLocal);
+                visitor.visitVarInsn(Opcodes.ISTORE, primaryLocal);
+            }
+            case "><" -> {
+                visitor.visitVarInsn(Opcodes.ILOAD, primaryLocal);
+                visitor.visitVarInsn(Opcodes.ISTORE, 4);
+                visitor.visitVarInsn(Opcodes.ILOAD, secondaryLocal);
+                visitor.visitVarInsn(Opcodes.ISTORE, primaryLocal);
+                visitor.visitVarInsn(Opcodes.ILOAD, 4);
+                visitor.visitVarInsn(Opcodes.ISTORE, secondaryLocal);
+            }
+            case "+=", "-=", "*=", "/=", "%=", "<", ">" -> {
+                visitor.visitVarInsn(Opcodes.ILOAD, primaryLocal);
+                visitor.visitVarInsn(Opcodes.ILOAD, secondaryLocal);
+                buildArithmeticOperation(visitor, operation);
+                visitor.visitVarInsn(Opcodes.ISTORE, primaryLocal);
+            }
+            default -> throw new IllegalArgumentException("Unsupported promoted operation: " + operation);
+        }
+    }
+
+    public static void buildMixedOperationPrimaryPromoted(MethodVisitor visitor, int primaryLocal, int secondarySlot, String operation) {
+        switch (operation) {
+            case "=" -> {
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
+                pushInt(visitor, secondarySlot);
+                visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
+                visitor.visitVarInsn(Opcodes.ISTORE, primaryLocal);
+            }
+            case "><" -> {
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
+                pushInt(visitor, secondarySlot);
+                visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
+                visitor.visitVarInsn(Opcodes.ISTORE, 4);
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
+                pushInt(visitor, secondarySlot);
+                visitor.visitVarInsn(Opcodes.ILOAD, primaryLocal);
+                visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "setSlotValue", "(II)V", false);
+                visitor.visitVarInsn(Opcodes.ILOAD, 4);
+                visitor.visitVarInsn(Opcodes.ISTORE, primaryLocal);
+            }
+            default -> {
+                visitor.visitVarInsn(Opcodes.ILOAD, primaryLocal);
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
+                pushInt(visitor, secondarySlot);
+                visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
+                buildArithmeticOperation(visitor, operation);
+                visitor.visitVarInsn(Opcodes.ISTORE, primaryLocal);
+            }
+        }
+    }
+
+    public static void buildMixedOperationSecondaryPromoted(MethodVisitor visitor, int primarySlot, int secondaryLocal, String operation) {
+        switch (operation) {
+            case "=" -> {
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
+                pushInt(visitor, primarySlot);
+                visitor.visitVarInsn(Opcodes.ILOAD, secondaryLocal);
+                visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "setSlotValue", "(II)V", false);
+            }
+            case "><" -> {
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
+                pushInt(visitor, primarySlot);
+                visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
+                visitor.visitVarInsn(Opcodes.ISTORE, 4);
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
+                pushInt(visitor, primarySlot);
+                visitor.visitVarInsn(Opcodes.ILOAD, secondaryLocal);
+                visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "setSlotValue", "(II)V", false);
+                visitor.visitVarInsn(Opcodes.ILOAD, 4);
+                visitor.visitVarInsn(Opcodes.ISTORE, secondaryLocal);
+            }
+            default -> {
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
+                pushInt(visitor, primarySlot);
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
+                pushInt(visitor, primarySlot);
+                visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
+                visitor.visitVarInsn(Opcodes.ILOAD, secondaryLocal);
+                buildArithmeticOperation(visitor, operation);
+                visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "setSlotValue", "(II)V", false);
+            }
+        }
+    }
+
     public static void buildReturnValue(MethodVisitor visitor, int returnValue) {
         visitor.visitTypeInsn(Opcodes.NEW, OUTCOME_INTERNAL);
         visitor.visitInsn(Opcodes.DUP);
@@ -169,13 +295,7 @@ public final class BaselineBytecodeOps {
         visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
 
         switch (operation) {
-            case "+=" -> visitor.visitInsn(Opcodes.IADD);
-            case "-=" -> visitor.visitInsn(Opcodes.ISUB);
-            case "*=" -> visitor.visitInsn(Opcodes.IMUL);
-            case "/=" -> buildSafeDivide(visitor, Opcodes.IDIV);
-            case "%=" -> buildSafeDivide(visitor, Opcodes.IREM);
-            case "<" -> visitor.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Math", "min", "(II)I", false);
-            case ">" -> visitor.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Math", "max", "(II)I", false);
+            case "+=", "-=", "*=", "/=", "%=", "<", ">" -> buildArithmeticOperation(visitor, operation);
             default -> throw new IllegalArgumentException("Unsupported binary operation: " + operation);
         }
 
@@ -215,6 +335,19 @@ public final class BaselineBytecodeOps {
         visitor.visitLabel(divisorNonZero);
         visitor.visitInsn(opcode);
         visitor.visitLabel(done);
+    }
+
+    private static void buildArithmeticOperation(MethodVisitor visitor, String operation) {
+        switch (operation) {
+            case "+=" -> visitor.visitInsn(Opcodes.IADD);
+            case "-=" -> visitor.visitInsn(Opcodes.ISUB);
+            case "*=" -> visitor.visitInsn(Opcodes.IMUL);
+            case "/=" -> buildSafeDivide(visitor, Opcodes.IDIV);
+            case "%=" -> buildSafeDivide(visitor, Opcodes.IREM);
+            case "<" -> visitor.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Math", "min", "(II)I", false);
+            case ">" -> visitor.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Math", "max", "(II)I", false);
+            default -> throw new IllegalArgumentException("Unsupported arithmetic operation: " + operation);
+        }
     }
 
     public static void pushInt(MethodVisitor visitor, int value) {

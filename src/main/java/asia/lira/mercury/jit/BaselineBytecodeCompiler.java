@@ -18,17 +18,15 @@ public final class BaselineBytecodeCompiler {
     }
 
     public static CompiledClassData compile(
-            BaselineProgram program,
-            BaselineCompiledFunctionRegistry.JumpGraph.CompilationUnit unit,
-            int[] requiredSlots,
+            LoweredUnit unit,
             Map<net.minecraft.util.Identifier, String> internalNames,
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
             Map<net.minecraft.util.Identifier, int[]> requiredSlotsById,
             Set<net.minecraft.util.Identifier> classesWithSharedRequiredSlots
     ) {
-        String internalName = internalNameFor(program.id());
-        byte[] classBytes = generateClass(program, internalName, unit, requiredSlots, internalNames, callSiteCounts, requiredSlotsById, classesWithSharedRequiredSlots);
-        return new CompiledClassData(program.id(), internalName, classBytes, requiredSlots);
+        String internalName = internalNameFor(unit.entryId());
+        byte[] classBytes = generateClass(unit, internalName, internalNames, callSiteCounts, requiredSlotsById, classesWithSharedRequiredSlots);
+        return new CompiledClassData(unit.entryId(), internalName, classBytes, unit.requiredSlots());
     }
 
     public static String internalNameFor(net.minecraft.util.Identifier id) {
@@ -38,10 +36,8 @@ public final class BaselineBytecodeCompiler {
     }
 
     private static byte[] generateClass(
-            BaselineProgram program,
+            LoweredUnit unit,
             String internalName,
-            BaselineCompiledFunctionRegistry.JumpGraph.CompilationUnit unit,
-            int[] requiredSlots,
             Map<net.minecraft.util.Identifier, String> internalNames,
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
             Map<net.minecraft.util.Identifier, int[]> requiredSlotsById,
@@ -50,14 +46,14 @@ public final class BaselineBytecodeCompiler {
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
         writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER, internalName, null, "java/lang/Object", null);
 
-        boolean emitRequiredSlotsField = classesWithSharedRequiredSlots.contains(program.id());
+        boolean emitRequiredSlotsField = classesWithSharedRequiredSlots.contains(unit.entryId());
         if (emitRequiredSlotsField) {
             writer.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL, REQUIRED_SLOTS_FIELD, "[I", null, null).visitEnd();
         }
 
         emitConstructor(writer);
         if (emitRequiredSlotsField) {
-            emitClassInitializer(writer, internalName, requiredSlots);
+            emitClassInitializer(writer, internalName, unit.requiredSlots());
         }
         emitInvoke(writer, unit, internalNames, callSiteCounts, requiredSlotsById);
 
@@ -87,7 +83,7 @@ public final class BaselineBytecodeCompiler {
 
     private static void emitInvoke(
             ClassWriter writer,
-            BaselineCompiledFunctionRegistry.JumpGraph.CompilationUnit unit,
+            LoweredUnit unit,
             Map<net.minecraft.util.Identifier, String> internalNames,
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
             Map<net.minecraft.util.Identifier, int[]> requiredSlotsById
@@ -95,12 +91,17 @@ public final class BaselineBytecodeCompiler {
         String descriptor = "(" + EXECUTION_FRAME_DESC + "Ljava/lang/Object;" + Type.getDescriptor(net.minecraft.command.CommandExecutionContext.class) + ")" + OUTCOME_DESC;
         MethodVisitor visitor = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "invoke", descriptor, null, new String[]{"java/lang/Throwable"});
         visitor.visitCode();
+
+        for (Map.Entry<Integer, Integer> promoted : unit.promotedSlotLocals().entrySet()) {
+            BaselineBytecodeOps.buildInitializePromotedSlot(visitor, promoted.getKey(), promoted.getValue());
+        }
+
         BaselineBytecodeOps.pushInt(visitor, unit.entryIndex());
         visitor.visitVarInsn(Opcodes.ISTORE, 3);
 
         Label loopStart = new Label();
         Label defaultLabel = new Label();
-        Label[] stateLabels = new Label[unit.programs().size()];
+        Label[] stateLabels = new Label[unit.blocks().size()];
         for (int i = 0; i < stateLabels.length; i++) {
             stateLabels[i] = new Label();
         }
@@ -109,64 +110,121 @@ public final class BaselineBytecodeCompiler {
         visitor.visitVarInsn(Opcodes.ILOAD, 3);
         visitor.visitTableSwitchInsn(0, stateLabels.length - 1, defaultLabel, stateLabels);
 
-        for (int i = 0; i < unit.programs().size(); i++) {
+        for (int i = 0; i < unit.blocks().size(); i++) {
             visitor.visitLabel(stateLabels[i]);
-            emitProgramBody(visitor, unit, unit.programs().get(i), loopStart, internalNames, callSiteCounts, requiredSlotsById);
+            emitBlock(visitor, unit, unit.blocks().get(i), loopStart, internalNames, callSiteCounts, requiredSlotsById);
         }
 
         visitor.visitLabel(defaultLabel);
+        spillAllPromoted(visitor, unit);
         BaselineBytecodeOps.buildCompleted(visitor);
         visitor.visitMaxs(0, 0);
         visitor.visitEnd();
     }
 
-    private static void emitProgramBody(
+    private static void emitBlock(
             MethodVisitor visitor,
-            BaselineCompiledFunctionRegistry.JumpGraph.CompilationUnit unit,
-            BaselineProgram program,
+            LoweredUnit unit,
+            LoweredUnit.LoweredBlock block,
             Label loopStart,
             Map<net.minecraft.util.Identifier, String> internalNames,
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
             Map<net.minecraft.util.Identifier, int[]> requiredSlotsById
     ) {
-        for (BaselineInstruction instruction : program.instructions()) {
-            switch (instruction.opCode()) {
-                case SET_CONST -> BaselineBytecodeOps.buildSetConst(visitor, instruction.primarySlot(), instruction.immediate());
-                case ADD_CONST -> BaselineBytecodeOps.buildAddConst(visitor, instruction.primarySlot(), instruction.immediate());
-                case GET -> BaselineBytecodeOps.buildGet(visitor, instruction.primarySlot());
-                case RESET -> BaselineBytecodeOps.buildReset(visitor, instruction.primarySlot());
-                case OPERATION -> BaselineBytecodeOps.buildOperation(visitor, instruction.primarySlot(), instruction.secondarySlot(), instruction.operation());
-                case CALL -> emitDirectInvoke(visitor, instruction.targetFunction(), internalNames, callSiteCounts, requiredSlotsById, false);
-                case JUMP -> {
-                    int localJumpIndex = unit.indexOf(instruction.targetFunction());
-                    if (localJumpIndex >= 0) {
-                        BaselineBytecodeOps.pushInt(visitor, localJumpIndex);
-                        visitor.visitVarInsn(Opcodes.ISTORE, 3);
-                        visitor.visitJumpInsn(Opcodes.GOTO, loopStart);
-                    } else {
-                        emitDirectInvoke(visitor, instruction.targetFunction(), internalNames, callSiteCounts, requiredSlotsById, true);
-                    }
-                }
-                case RETURN_VALUE -> BaselineBytecodeOps.buildReturnValue(visitor, instruction.immediate());
+        for (LoweredUnit.LoweredInstruction instruction : block.instructions()) {
+            switch (instruction) {
+                case LoweredUnit.SetConstInstruction setConst ->
+                        emitSetConst(visitor, unit, setConst.slotId(), setConst.value());
+                case LoweredUnit.AddConstInstruction addConst ->
+                        emitAddConst(visitor, unit, addConst.slotId(), addConst.delta());
+                case LoweredUnit.GetInstruction get ->
+                        emitGet(visitor, unit, get.slotId());
+                case LoweredUnit.ResetInstruction reset ->
+                        BaselineBytecodeOps.buildReset(visitor, reset.slotId());
+                case LoweredUnit.OperationInstruction operation ->
+                        emitOperation(visitor, unit, operation.primarySlot(), operation.secondarySlot(), operation.operation());
+                case LoweredUnit.CallInstruction call ->
+                        emitDirectInvoke(visitor, unit, call.targetFunction(), call.spillBeforeSlots(), call.reloadAfterSlots(), internalNames, callSiteCounts, requiredSlotsById, false);
             }
         }
-        BaselineBytecodeOps.buildCompleted(visitor);
+
+        switch (block.terminator()) {
+            case LoweredUnit.CompleteTerminator ignored -> {
+                spillAllPromoted(visitor, unit);
+                BaselineBytecodeOps.buildCompleted(visitor);
+            }
+            case LoweredUnit.ReturnValueTerminator returnValue -> {
+                spillAllPromoted(visitor, unit);
+                BaselineBytecodeOps.buildReturnValue(visitor, returnValue.returnValue());
+            }
+            case LoweredUnit.JumpLocalTerminator jumpLocal -> {
+                BaselineBytecodeOps.pushInt(visitor, jumpLocal.targetBlockIndex());
+                visitor.visitVarInsn(Opcodes.ISTORE, 3);
+                visitor.visitJumpInsn(Opcodes.GOTO, loopStart);
+            }
+            case LoweredUnit.JumpExternalTerminator jumpExternal -> {
+                spillAllPromoted(visitor, unit);
+                emitDirectInvoke(visitor, unit, jumpExternal.targetFunction(), jumpExternal.spillBeforeSlots(), new int[0], internalNames, callSiteCounts, requiredSlotsById, true);
+            }
+        }
+    }
+
+    private static void emitSetConst(MethodVisitor visitor, LoweredUnit unit, int slotId, int value) {
+        if (unit.isPromoted(slotId)) {
+            BaselineBytecodeOps.buildStorePromotedLocal(visitor, unit.localIndexFor(slotId), value);
+        } else {
+            BaselineBytecodeOps.buildSetConst(visitor, slotId, value);
+        }
+    }
+
+    private static void emitAddConst(MethodVisitor visitor, LoweredUnit unit, int slotId, int delta) {
+        if (unit.isPromoted(slotId)) {
+            BaselineBytecodeOps.buildAddPromotedLocal(visitor, unit.localIndexFor(slotId), delta);
+        } else {
+            BaselineBytecodeOps.buildAddConst(visitor, slotId, delta);
+        }
+    }
+
+    private static void emitGet(MethodVisitor visitor, LoweredUnit unit, int slotId) {
+        if (unit.isPromoted(slotId)) {
+            BaselineBytecodeOps.buildGetPromotedLocal(visitor, unit.localIndexFor(slotId));
+        } else {
+            BaselineBytecodeOps.buildGet(visitor, slotId);
+        }
+    }
+
+    private static void emitOperation(MethodVisitor visitor, LoweredUnit unit, int primarySlot, int secondarySlot, String operation) {
+        if (unit.isPromoted(primarySlot) && unit.isPromoted(secondarySlot)) {
+            BaselineBytecodeOps.buildPromotedOperation(visitor, unit.localIndexFor(primarySlot), unit.localIndexFor(secondarySlot), operation);
+        } else if (unit.isPromoted(primarySlot)) {
+            BaselineBytecodeOps.buildMixedOperationPrimaryPromoted(visitor, unit.localIndexFor(primarySlot), secondarySlot, operation);
+        } else if (unit.isPromoted(secondarySlot)) {
+            BaselineBytecodeOps.buildMixedOperationSecondaryPromoted(visitor, primarySlot, unit.localIndexFor(secondarySlot), operation);
+        } else {
+            BaselineBytecodeOps.buildOperation(visitor, primarySlot, secondarySlot, operation);
+        }
     }
 
     private static void emitDirectInvoke(
             MethodVisitor visitor,
+            LoweredUnit unit,
             net.minecraft.util.Identifier targetFunction,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots,
             Map<net.minecraft.util.Identifier, String> internalNames,
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
             Map<net.minecraft.util.Identifier, int[]> requiredSlotsById,
             boolean returnOutcome
     ) {
+        spillPromotedSlots(visitor, unit, spillBeforeSlots);
+
         String targetInternalName = internalNames.get(targetFunction);
         if (targetInternalName == null) {
             if (returnOutcome) {
                 BaselineBytecodeOps.buildExternalJump(visitor, targetFunction.toString());
             } else {
                 BaselineBytecodeOps.buildCall(visitor, targetFunction.toString());
+                reloadPromotedSlots(visitor, unit, reloadAfterSlots);
             }
             return;
         }
@@ -179,6 +237,31 @@ public final class BaselineBytecodeCompiler {
             BaselineBytecodeOps.buildEnsureLoadedFromStaticField(visitor, targetInternalName, REQUIRED_SLOTS_FIELD);
         }
         BaselineBytecodeOps.buildStaticInvoke(visitor, targetInternalName, returnOutcome);
+        if (!returnOutcome) {
+            reloadPromotedSlots(visitor, unit, reloadAfterSlots);
+        }
+    }
+
+    private static void spillAllPromoted(MethodVisitor visitor, LoweredUnit unit) {
+        for (Map.Entry<Integer, Integer> entry : unit.promotedSlotLocals().entrySet()) {
+            BaselineBytecodeOps.buildSpillPromotedSlot(visitor, entry.getKey(), entry.getValue());
+        }
+    }
+
+    private static void spillPromotedSlots(MethodVisitor visitor, LoweredUnit unit, int[] slotIds) {
+        for (int slotId : slotIds) {
+            if (unit.isPromoted(slotId)) {
+                BaselineBytecodeOps.buildSpillPromotedSlot(visitor, slotId, unit.localIndexFor(slotId));
+            }
+        }
+    }
+
+    private static void reloadPromotedSlots(MethodVisitor visitor, LoweredUnit unit, int[] slotIds) {
+        for (int slotId : slotIds) {
+            if (unit.isPromoted(slotId)) {
+                BaselineBytecodeOps.buildReloadPromotedSlot(visitor, slotId, unit.localIndexFor(slotId));
+            }
+        }
     }
 
     public static boolean shouldInlineRequiredSlots(int slotCount, int callSites) {
