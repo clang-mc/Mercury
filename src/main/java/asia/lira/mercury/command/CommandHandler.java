@@ -198,7 +198,7 @@ public class CommandHandler implements CommandRegistrationCallback {
                             heap.setElement(addr + 1, NbtInt.of(high));
                             return 1;
                         }
-                        case 2 -> {  // void print(const char *string)
+                        case 2 -> {  // void puts(const char *string)
                             ReadableScoreboardScore r0 = scoreboard.getScore(R0, vmRegs);
                             if (r0 == null) {
                                 return -1;
