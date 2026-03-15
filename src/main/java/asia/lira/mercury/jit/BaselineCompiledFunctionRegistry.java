@@ -27,7 +27,16 @@ public final class BaselineCompiledFunctionRegistry {
         return INSTANCE;
     }
 
+    public void clear() {
+        artifacts.clear();
+    }
+
     public void rebuild(Collection<FunctionIrRegistry.ParsedFunctionIr> functions) {
+        if (!MercuryJitRuntime.isEnabled()) {
+            clear();
+            return;
+        }
+
         Map<Identifier, BaselineProgram.Builder> candidates = new LinkedHashMap<>();
         for (FunctionIrRegistry.ParsedFunctionIr functionIr : functions) {
             BaselineProgram.Builder builder = BaselineCompiler.analyze(functionIr);

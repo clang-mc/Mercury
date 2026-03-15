@@ -6,6 +6,8 @@ import asia.lira.mercury.ir.FunctionIrExporter;
 import asia.lira.mercury.ir.FunctionIrRegistry;
 import asia.lira.mercury.jit.BaselineClassExporter;
 import asia.lira.mercury.jit.JitPreparationExporter;
+import asia.lira.mercury.jit.MercuryJitRuntime;
+import asia.lira.mercury.jit.SynchronizationRuntime;
 import com.mojang.brigadier.CommandDispatcher;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandRegistryAccess;
@@ -15,6 +17,7 @@ import net.minecraft.nbt.NbtInt;
 import net.minecraft.nbt.NbtList;
 import net.minecraft.scoreboard.*;
 import net.minecraft.server.command.CommandManager;
+import net.minecraft.server.command.ReloadCommand;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
@@ -143,6 +146,33 @@ public class CommandHandler implements CommandRegistrationCallback {
         }
     }
 
+    private static int switchJit(ServerCommandSource source, boolean enabled) {
+        if (SynchronizationRuntime.getInstance().hasActiveFrames()) {
+            source.sendError(Text.literal(
+                    enabled
+                            ? "Cannot enable Mercury JIT while a compiled frame is active"
+                            : "Cannot disable Mercury JIT while a compiled frame is active"
+            ));
+            return -1;
+        }
+
+        if (MercuryJitRuntime.isEnabled() == enabled) {
+            source.sendFeedback(() -> Text.literal(
+                    enabled ? "Mercury JIT is already enabled" : "Mercury JIT is already disabled"
+            ), false);
+            return 1;
+        }
+
+        MercuryJitRuntime.setEnabled(enabled);
+        ReloadCommand.tryReloadDataPacks(source.getServer().getDataPackManager().getEnabledIds(), source);
+        source.sendFeedback(() -> Text.literal(
+                enabled
+                        ? "Mercury JIT enabled; reloading datapacks"
+                        : "Mercury JIT disabled; reloading datapacks"
+        ), true);
+        return 1;
+    }
+
     @Override
     public void register(@NotNull CommandDispatcher<ServerCommandSource> dispatcher,
                          CommandRegistryAccess access, CommandManager.RegistrationEnvironment environment) {
@@ -161,6 +191,14 @@ public class CommandHandler implements CommandRegistrationCallback {
                         )
                         .then(literal("classes")
                                 .executes(context -> dumpClasses(context.getSource()))
+                        )
+                )
+                .then(literal("jit")
+                        .then(literal("enable")
+                                .executes(context -> switchJit(context.getSource(), true))
+                        )
+                        .then(literal("disable")
+                                .executes(context -> switchJit(context.getSource(), false))
                         )
                 )
         );

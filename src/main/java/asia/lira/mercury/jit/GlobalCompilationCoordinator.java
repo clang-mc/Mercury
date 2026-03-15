@@ -35,10 +35,16 @@ public final class GlobalCompilationCoordinator {
                 loadedFunctions
         );
 
+        boolean jitEnabled = MercuryJitRuntime.isEnabled();
+        if (!jitEnabled) {
+            BaselineCompiledFunctionRegistry.getInstance().clear();
+        }
+
         Map<Identifier, CommandFunction<ServerCommandSource>> wrapped = new LinkedHashMap<>();
         for (Map.Entry<Identifier, CommandFunction<ServerCommandSource>> entry : loadedFunctions.entrySet()) {
             CommandFunction<ServerCommandSource> function = entry.getValue();
-            if (function instanceof Procedure<?> procedure
+            if (jitEnabled
+                    && function instanceof Procedure<?> procedure
                     && !(function instanceof CompiledFunctionWrapper<?>)
                     && BaselineCompiledFunctionRegistry.getInstance().get(entry.getKey()) != null) {
                 @SuppressWarnings("unchecked")
