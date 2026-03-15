@@ -8,21 +8,9 @@ import net.minecraft.scoreboard.Scoreboard;
 import net.minecraft.scoreboard.ScoreboardObjective;
 import net.minecraft.util.Identifier;
 
-@SuppressWarnings("unused")
+@SuppressWarnings({"unused", "UnusedReturnValue"})
 public final class BaselineExecutionEngine {
     private BaselineExecutionEngine() {
-    }
-
-    public static void opGet(ExecutionFrame frame, int slotId) {
-        readSlot(frame, slotId);
-    }
-
-    public static void opReset(ExecutionFrame frame, int slotId) {
-        resetSlot(frame, slotId);
-    }
-
-    public static void opOperation(ExecutionFrame frame, int primarySlot, int secondarySlot, String operation) {
-        applyOperation(frame, primarySlot, secondarySlot, operation);
     }
 
     public static void opCall(String functionId, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
@@ -93,34 +81,13 @@ public final class BaselineExecutionEngine {
         scoreboard.removeScore(ScoreHolder.fromName(metadata.key().holderName()), objective);
     }
 
-    public static void applyOperation(ExecutionFrame frame, int primarySlot, int secondarySlot, String operation) {
-        int left = readSlot(frame, primarySlot);
-        int right = readSlot(frame, secondarySlot);
-        int result = switch (operation) {
-            case "=", "><" -> right;
-            case "+=" -> left + right;
-            case "-=" -> left - right;
-            case "*=" -> left * right;
-            case "/=" -> right == 0 ? 0 : left / right;
-            case "%=" -> right == 0 ? 0 : left % right;
-            case "<" -> Math.min(left, right);
-            case ">" -> Math.max(left, right);
-            default -> throw new IllegalStateException("Unexpected scoreboard operation: " + operation);
-        };
-
-        if ("><".equals(operation)) {
-            frame.setSlotValue(secondarySlot, left);
-        }
-        frame.setSlotValue(primarySlot, result);
-    }
-
     private static ExecutionOutcome invokeCompiled(Identifier id, ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
         BaselineCompiledFunctionRegistry.CompiledArtifact artifact = BaselineCompiledFunctionRegistry.getInstance().getArtifact(id);
         if (artifact == null) {
             return ExecutionOutcome.fallback();
         }
         ensureLoaded(frame, artifact.requiredSlots());
-        return artifact.compiledFunction().invoke(frame, source, context);
+        return artifact.invoke(frame, source, context);
     }
 
     public record ExecutionOutcome(

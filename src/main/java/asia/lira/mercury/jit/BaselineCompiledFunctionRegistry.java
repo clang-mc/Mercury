@@ -1,9 +1,13 @@
 package asia.lira.mercury.jit;
 
 import asia.lira.mercury.ir.FunctionIrRegistry;
+import net.minecraft.command.CommandExecutionContext;
 import net.minecraft.util.Identifier;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -41,10 +45,62 @@ public final class BaselineCompiledFunctionRegistry {
 
         artifacts.clear();
         JumpGraph jumpGraph = JumpGraph.build(compiledPrograms);
-        CallGraph callGraph = CallGraph.build(compiledPrograms);
-        Map<Identifier, Boolean> visiting = new LinkedHashMap<>();
+        Map<Identifier, String> internalNames = new LinkedHashMap<>();
+        Map<Identifier, int[]> requiredSlotsById = new LinkedHashMap<>();
         for (Identifier id : compiledPrograms.keySet()) {
-            compileArtifact(id, compiledPrograms, jumpGraph, callGraph, visiting);
+            internalNames.put(id, BaselineBytecodeCompiler.internalNameFor(id));
+            requiredSlotsById.put(id, collectRequiredSlots(jumpGraph.unitFor(id)));
+        }
+        Map<Identifier, Integer> callSiteCounts = collectCallSiteCounts(compiledPrograms, jumpGraph);
+        Set<Identifier> classesWithSharedRequiredSlots = collectClassesWithSharedRequiredSlots(compiledPrograms.keySet(), requiredSlotsById, callSiteCounts);
+
+        Map<Identifier, BaselineBytecodeCompiler.CompiledClassData> compiledClasses = new LinkedHashMap<>();
+        for (Map.Entry<Identifier, BaselineProgram> entry : compiledPrograms.entrySet()) {
+            JumpGraph.CompilationUnit unit = jumpGraph.unitFor(entry.getKey());
+            compiledClasses.put(entry.getKey(), BaselineBytecodeCompiler.compile(
+                    entry.getValue(),
+                    unit,
+                    requiredSlotsById.get(entry.getKey()),
+                    internalNames,
+                    callSiteCounts,
+                    requiredSlotsById,
+                    classesWithSharedRequiredSlots
+            ));
+        }
+
+        GeneratedClassLoader classLoader = new GeneratedClassLoader(BaselineCompiledFunctionRegistry.class.getClassLoader());
+        Map<Identifier, Class<?>> definedClasses = new LinkedHashMap<>();
+        for (Map.Entry<Identifier, BaselineBytecodeCompiler.CompiledClassData> entry : compiledClasses.entrySet()) {
+            BaselineBytecodeCompiler.CompiledClassData classData = entry.getValue();
+            definedClasses.put(entry.getKey(), classLoader.define(classData.internalName().replace('/', '.'), classData.classBytes()));
+        }
+
+        MethodHandles.Lookup lookup = MethodHandles.lookup();
+        for (Map.Entry<Identifier, BaselineBytecodeCompiler.CompiledClassData> entry : compiledClasses.entrySet()) {
+            Identifier id = entry.getKey();
+            Class<?> definedClass = definedClasses.get(id);
+            try {
+                MethodHandle invokeHandle = MethodHandles.privateLookupIn(definedClass, lookup).findStatic(
+                        definedClass,
+                        "invoke",
+                        MethodType.methodType(
+                                BaselineExecutionEngine.ExecutionOutcome.class,
+                                ExecutionFrame.class,
+                                Object.class,
+                                CommandExecutionContext.class
+                        )
+                );
+                BaselineBytecodeCompiler.CompiledClassData classData = entry.getValue();
+                artifacts.put(id, new CompiledArtifact(
+                        compiledPrograms.get(id),
+                        invokeHandle,
+                        classData.classBytes(),
+                        classData.internalName(),
+                        classData.requiredSlots()
+                ));
+            } catch (ReflectiveOperationException exception) {
+                throw new RuntimeException("Failed to bind compiled class for " + id, exception);
+            }
         }
     }
 
@@ -97,98 +153,6 @@ public final class BaselineCompiledFunctionRegistry {
         return true;
     }
 
-    private @Nullable CompiledArtifact compileArtifact(
-            Identifier id,
-            Map<Identifier, BaselineProgram> compiledPrograms,
-            JumpGraph jumpGraph,
-            CallGraph callGraph,
-            Map<Identifier, Boolean> visiting
-    ) {
-        CompiledArtifact existing = artifacts.get(id);
-        if (existing != null) {
-            return existing;
-        }
-
-        if (Boolean.TRUE.equals(visiting.get(id))) {
-            return null;
-        }
-
-        BaselineProgram program = compiledPrograms.get(id);
-        if (program == null) {
-            return null;
-        }
-
-        visiting.put(id, true);
-        JumpGraph.CompilationUnit unit = jumpGraph.unitFor(id);
-        Set<Identifier> localPrograms = new LinkedHashSet<>();
-        for (BaselineProgram localProgram : unit.programs()) {
-            localPrograms.add(localProgram.id());
-        }
-
-        for (Identifier dependency : collectExternalDependencies(unit, localPrograms)) {
-            if (callGraph.areInSameComponent(id, dependency)) {
-                continue;
-            }
-            compileArtifact(dependency, compiledPrograms, jumpGraph, callGraph, visiting);
-        }
-
-        List<BaselineBytecodeCompiler.DirectCallee> directCallees = collectDirectCallees(unit, localPrograms, callGraph, id);
-        CompiledArtifact artifact = BaselineBytecodeCompiler.compile(program, unit, collectRequiredSlots(unit), directCallees);
-        artifacts.put(id, artifact);
-        visiting.remove(id);
-        return artifact;
-    }
-
-    private Set<Identifier> collectExternalDependencies(JumpGraph.CompilationUnit unit, Set<Identifier> localPrograms) {
-        Set<Identifier> dependencies = new LinkedHashSet<>();
-        for (BaselineProgram program : unit.programs()) {
-            for (Identifier dependency : program.dependencies()) {
-                if (!localPrograms.contains(dependency)) {
-                    dependencies.add(dependency);
-                }
-            }
-        }
-        return dependencies;
-    }
-
-    private List<BaselineBytecodeCompiler.DirectCallee> collectDirectCallees(
-            JumpGraph.CompilationUnit unit,
-            Set<Identifier> localPrograms,
-            CallGraph callGraph,
-            Identifier entryId
-    ) {
-        Set<Identifier> seen = new LinkedHashSet<>();
-        List<BaselineBytecodeCompiler.DirectCallee> directCallees = new java.util.ArrayList<>();
-        int callerComponent = callGraph.componentOf(entryId);
-
-        for (BaselineProgram program : unit.programs()) {
-            for (Identifier dependency : program.dependencies()) {
-                if (localPrograms.contains(dependency) || !seen.add(dependency)) {
-                    continue;
-                }
-                if (callGraph.componentOf(dependency) == callerComponent) {
-                    continue;
-                }
-
-                CompiledArtifact artifact = artifacts.get(dependency);
-                if (artifact != null) {
-                    directCallees.add(new BaselineBytecodeCompiler.DirectCallee(dependency, artifact.compiledFunction(), artifact.requiredSlots()));
-                }
-            }
-        }
-
-        return List.copyOf(directCallees);
-    }
-
-    public record CompiledArtifact(
-            BaselineProgram program,
-            CompiledFunction compiledFunction,
-            byte[] classBytes,
-            String internalClassName,
-            int[] requiredSlots
-    ) {
-    }
-
     private static int[] collectRequiredSlots(JumpGraph.CompilationUnit unit) {
         Set<Integer> slotIds = new LinkedHashSet<>();
         for (BaselineProgram program : unit.programs()) {
@@ -204,32 +168,54 @@ public final class BaselineCompiledFunctionRegistry {
         return slotIds.stream().mapToInt(Integer::intValue).toArray();
     }
 
-    private record CallGraph(Map<Identifier, Integer> components) {
-        static CallGraph build(Map<Identifier, BaselineProgram> programs) {
-            Map<Identifier, List<Identifier>> edges = new LinkedHashMap<>();
-            for (Map.Entry<Identifier, BaselineProgram> entry : programs.entrySet()) {
-                edges.put(entry.getKey(), entry.getValue().dependencies().stream()
-                        .filter(programs::containsKey)
-                        .toList());
-            }
-
-            Tarjan tarjan = new Tarjan(edges);
-            Map<Identifier, Integer> components = new LinkedHashMap<>();
-            List<List<Identifier>> groups = tarjan.components();
-            for (int index = 0; index < groups.size(); index++) {
-                for (Identifier id : groups.get(index)) {
-                    components.put(id, index);
+    private static Map<Identifier, Integer> collectCallSiteCounts(
+            Map<Identifier, BaselineProgram> programs,
+            JumpGraph jumpGraph
+    ) {
+        Map<Identifier, Integer> callSiteCounts = new LinkedHashMap<>();
+        for (Map.Entry<Identifier, BaselineProgram> entry : programs.entrySet()) {
+            JumpGraph.CompilationUnit unit = jumpGraph.unitFor(entry.getKey());
+            for (BaselineInstruction instruction : entry.getValue().instructions()) {
+                Identifier target = instruction.targetFunction();
+                if (target == null || !programs.containsKey(target)) {
+                    continue;
+                }
+                if (instruction.opCode() == BaselineInstruction.OpCode.JUMP && unit.indexOf(target) >= 0) {
+                    continue;
+                }
+                if (instruction.opCode() == BaselineInstruction.OpCode.CALL || instruction.opCode() == BaselineInstruction.OpCode.JUMP) {
+                    callSiteCounts.merge(target, 1, Integer::sum);
                 }
             }
-            return new CallGraph(components);
         }
+        return callSiteCounts;
+    }
 
-        boolean areInSameComponent(Identifier left, Identifier right) {
-            return componentOf(left) == componentOf(right);
+    private static Set<Identifier> collectClassesWithSharedRequiredSlots(
+            Set<Identifier> compiledIds,
+            Map<Identifier, int[]> requiredSlotsById,
+            Map<Identifier, Integer> callSiteCounts
+    ) {
+        Set<Identifier> shared = new LinkedHashSet<>();
+        for (Identifier id : compiledIds) {
+            int slotCount = requiredSlotsById.getOrDefault(id, new int[0]).length;
+            int callSites = callSiteCounts.getOrDefault(id, 0);
+            if (!BaselineBytecodeCompiler.shouldInlineRequiredSlots(slotCount, callSites)) {
+                shared.add(id);
+            }
         }
+        return shared;
+    }
 
-        int componentOf(Identifier id) {
-            return components.getOrDefault(id, -1);
+    public record CompiledArtifact(
+            BaselineProgram program,
+            MethodHandle invokeHandle,
+            byte[] classBytes,
+            String internalClassName,
+            int[] requiredSlots
+    ) {
+        public BaselineExecutionEngine.ExecutionOutcome invoke(ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
+            return (BaselineExecutionEngine.ExecutionOutcome) invokeHandle.invoke(frame, source, context);
         }
     }
 
@@ -268,6 +254,16 @@ public final class BaselineCompiledFunctionRegistry {
                 }
                 return -1;
             }
+        }
+    }
+
+    private static final class GeneratedClassLoader extends ClassLoader {
+        private GeneratedClassLoader(ClassLoader parent) {
+            super(parent);
+        }
+
+        private Class<?> define(String binaryName, byte[] bytes) {
+            return defineClass(binaryName, bytes, 0, bytes.length);
         }
     }
 

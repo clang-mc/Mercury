@@ -8,7 +8,6 @@ import org.objectweb.asm.Type;
 public final class BaselineBytecodeOps {
     private static final String FRAME_INTERNAL = Type.getInternalName(ExecutionFrame.class);
     private static final String RUNTIME_INTERNAL = Type.getInternalName(BaselineExecutionEngine.class);
-    private static final String COMPILED_FUNCTION_INTERNAL = Type.getInternalName(CompiledFunction.class);
     private static final String OUTCOME_DESC = Type.getDescriptor(BaselineExecutionEngine.ExecutionOutcome.class);
     private static final String OUTCOME_INTERNAL = Type.getInternalName(BaselineExecutionEngine.ExecutionOutcome.class);
     private static final String OUTCOME_MODE_INTERNAL = Type.getInternalName(BaselineExecutionEngine.ExecutionOutcome.Mode.class);
@@ -18,23 +17,23 @@ public final class BaselineBytecodeOps {
     }
 
     public static void buildSetConst(MethodVisitor visitor, int slotId, int value) {
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, slotId);
         pushInt(visitor, value);
         visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "setSlotValue", "(II)V", false);
     }
 
     public static void buildGet(MethodVisitor visitor, int slotId) {
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, slotId);
         visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
         visitor.visitInsn(Opcodes.POP);
     }
 
     public static void buildAddConst(MethodVisitor visitor, int slotId, int delta) {
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, slotId);
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, slotId);
         visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
         pushInt(visitor, delta);
@@ -43,7 +42,7 @@ public final class BaselineBytecodeOps {
     }
 
     public static void buildReset(MethodVisitor visitor, int slotId) {
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, slotId);
         visitor.visitMethodInsn(Opcodes.INVOKESTATIC, RUNTIME_INTERNAL, "resetSlot", "(L" + FRAME_INTERNAL + ";I)V", false);
     }
@@ -51,9 +50,9 @@ public final class BaselineBytecodeOps {
     public static void buildOperation(MethodVisitor visitor, int primarySlot, int secondarySlot, String operation) {
         switch (operation) {
             case "=" -> {
-                visitor.visitVarInsn(Opcodes.ALOAD, 1);
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
                 pushInt(visitor, primarySlot);
-                visitor.visitVarInsn(Opcodes.ALOAD, 1);
+                visitor.visitVarInsn(Opcodes.ALOAD, 0);
                 pushInt(visitor, secondarySlot);
                 visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
                 visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "setSlotValue", "(II)V", false);
@@ -66,9 +65,9 @@ public final class BaselineBytecodeOps {
 
     public static void buildCall(MethodVisitor visitor, String functionId) {
         visitor.visitLdcInsn(functionId);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         visitor.visitVarInsn(Opcodes.ALOAD, 1);
         visitor.visitVarInsn(Opcodes.ALOAD, 2);
-        visitor.visitVarInsn(Opcodes.ALOAD, 3);
         visitor.visitMethodInsn(
                 Opcodes.INVOKESTATIC,
                 RUNTIME_INTERNAL,
@@ -81,9 +80,9 @@ public final class BaselineBytecodeOps {
 
     public static void buildExternalJump(MethodVisitor visitor, String functionId) {
         visitor.visitLdcInsn(functionId);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         visitor.visitVarInsn(Opcodes.ALOAD, 1);
         visitor.visitVarInsn(Opcodes.ALOAD, 2);
-        visitor.visitVarInsn(Opcodes.ALOAD, 3);
         visitor.visitMethodInsn(
                 Opcodes.INVOKESTATIC,
                 RUNTIME_INTERNAL,
@@ -94,34 +93,48 @@ public final class BaselineBytecodeOps {
         visitor.visitInsn(Opcodes.ARETURN);
     }
 
-    public static void buildDirectCall(MethodVisitor visitor, String ownerInternalName, int calleeIndex, boolean returnOutcome) {
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
-
+    public static void buildStaticInvoke(MethodVisitor visitor, String targetInternalName, boolean returnOutcome) {
         visitor.visitVarInsn(Opcodes.ALOAD, 0);
-        visitor.visitFieldInsn(Opcodes.GETFIELD, ownerInternalName, "calleeSlots", "[[I");
-        pushInt(visitor, calleeIndex);
-        visitor.visitInsn(Opcodes.AALOAD);
-        visitor.visitMethodInsn(Opcodes.INVOKESTATIC, RUNTIME_INTERNAL, "ensureLoaded", "(L" + FRAME_INTERNAL + ";[I)V", false);
-
-        visitor.visitVarInsn(Opcodes.ALOAD, 0);
-        visitor.visitFieldInsn(Opcodes.GETFIELD, ownerInternalName, "callees", "[L" + COMPILED_FUNCTION_INTERNAL + ";");
-        pushInt(visitor, calleeIndex);
-        visitor.visitInsn(Opcodes.AALOAD);
         visitor.visitVarInsn(Opcodes.ALOAD, 1);
         visitor.visitVarInsn(Opcodes.ALOAD, 2);
-        visitor.visitVarInsn(Opcodes.ALOAD, 3);
         visitor.visitMethodInsn(
-                Opcodes.INVOKEINTERFACE,
-                COMPILED_FUNCTION_INTERNAL,
+                Opcodes.INVOKESTATIC,
+                targetInternalName,
                 "invoke",
                 "(L" + FRAME_INTERNAL + ";Ljava/lang/Object;" + CONTEXT_DESC + ")" + OUTCOME_DESC,
-                true
+                false
         );
 
         if (returnOutcome) {
             visitor.visitInsn(Opcodes.ARETURN);
         } else {
             visitor.visitInsn(Opcodes.POP);
+        }
+    }
+
+    public static void buildEnsureLoadedFromStaticField(MethodVisitor visitor, String targetInternalName, String fieldName) {
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
+        visitor.visitFieldInsn(Opcodes.GETSTATIC, targetInternalName, fieldName, "[I");
+        visitor.visitMethodInsn(Opcodes.INVOKESTATIC, RUNTIME_INTERNAL, "ensureLoaded", "(L" + FRAME_INTERNAL + ";[I)V", false);
+    }
+
+    public static void buildInlineRequiredSlots(MethodVisitor visitor, int[] requiredSlots) {
+        for (int slotId : requiredSlots) {
+            visitor.visitVarInsn(Opcodes.ALOAD, 0);
+            pushInt(visitor, slotId);
+            visitor.visitMethodInsn(Opcodes.INVOKESTATIC, RUNTIME_INTERNAL, "readSlot", "(L" + FRAME_INTERNAL + ";I)I", false);
+            visitor.visitInsn(Opcodes.POP);
+        }
+    }
+
+    public static void buildIntArray(MethodVisitor visitor, int[] values) {
+        pushInt(visitor, values.length);
+        visitor.visitIntInsn(Opcodes.NEWARRAY, Opcodes.T_INT);
+        for (int i = 0; i < values.length; i++) {
+            visitor.visitInsn(Opcodes.DUP);
+            pushInt(visitor, i);
+            pushInt(visitor, values[i]);
+            visitor.visitInsn(Opcodes.IASTORE);
         }
     }
 
@@ -144,14 +157,14 @@ public final class BaselineBytecodeOps {
     }
 
     private static void buildBinaryOperation(MethodVisitor visitor, int primarySlot, int secondarySlot, String operation) {
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, primarySlot);
 
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, primarySlot);
         visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
 
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, secondarySlot);
         visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
 
@@ -170,24 +183,24 @@ public final class BaselineBytecodeOps {
     }
 
     private static void buildSwap(MethodVisitor visitor, int primarySlot, int secondarySlot) {
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, primarySlot);
+        visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
+        visitor.visitVarInsn(Opcodes.ISTORE, 4);
+
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
+        pushInt(visitor, secondarySlot);
         visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
         visitor.visitVarInsn(Opcodes.ISTORE, 5);
 
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
-        pushInt(visitor, secondarySlot);
-        visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "getSlotValue", "(I)I", false);
-        visitor.visitVarInsn(Opcodes.ISTORE, 6);
-
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, primarySlot);
-        visitor.visitVarInsn(Opcodes.ILOAD, 6);
+        visitor.visitVarInsn(Opcodes.ILOAD, 5);
         visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "setSlotValue", "(II)V", false);
 
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
         pushInt(visitor, secondarySlot);
-        visitor.visitVarInsn(Opcodes.ILOAD, 5);
+        visitor.visitVarInsn(Opcodes.ILOAD, 4);
         visitor.visitMethodInsn(Opcodes.INVOKEVIRTUAL, FRAME_INTERNAL, "setSlotValue", "(II)V", false);
     }
 
