@@ -74,6 +74,12 @@ public final class SlotPromotionPass implements BaselinePass {
                     }
                     case LoweredUnit.CallInstruction ignored -> {
                     }
+                    case LoweredUnit.ReflectiveBridgeInstruction ignored -> {
+                    }
+                    case LoweredUnit.ActionBridgeInstruction ignored -> {
+                    }
+                    case LoweredUnit.SpecializedInstruction ignored -> {
+                    }
                 }
             }
         }
@@ -101,9 +107,37 @@ public final class SlotPromotionPass implements BaselinePass {
                 SlotEffectSummary effectSummary = context.effectSummaries().get(callInstruction.targetFunction());
                 rewrittenInstructions.add(new LoweredUnit.CallInstruction(
                         callInstruction.targetFunction(),
+                        callInstruction.bindingId(),
                         collectSpillSlots(promotableSlots, effectSummary),
                         collectReloadSlots(promotableSlots, effectSummary),
                         callInstruction.sourceText()
+                ));
+                continue;
+            }
+            if (instruction instanceof LoweredUnit.ReflectiveBridgeInstruction reflectiveBridgeInstruction) {
+                rewrittenInstructions.add(new LoweredUnit.ReflectiveBridgeInstruction(
+                        reflectiveBridgeInstruction.bindingId(),
+                        toIntArray(promotableSlots),
+                        toIntArray(promotableSlots),
+                        reflectiveBridgeInstruction.sourceText()
+                ));
+                continue;
+            }
+            if (instruction instanceof LoweredUnit.ActionBridgeInstruction actionBridgeInstruction) {
+                rewrittenInstructions.add(new LoweredUnit.ActionBridgeInstruction(
+                        actionBridgeInstruction.bindingId(),
+                        toIntArray(promotableSlots),
+                        toIntArray(promotableSlots),
+                        actionBridgeInstruction.sourceText()
+                ));
+                continue;
+            }
+            if (instruction instanceof LoweredUnit.SpecializedInstruction specializedInstruction) {
+                rewrittenInstructions.add(new LoweredUnit.SpecializedInstruction(
+                        specializedInstruction.specializedId(),
+                        toIntArray(promotableSlots),
+                        toIntArray(promotableSlots),
+                        specializedInstruction.sourceText()
                 ));
                 continue;
             }
@@ -115,7 +149,14 @@ public final class SlotPromotionPass implements BaselinePass {
             SlotEffectSummary effectSummary = context.effectSummaries().get(jumpExternalTerminator.targetFunction());
             terminator = new LoweredUnit.JumpExternalTerminator(
                     jumpExternalTerminator.targetFunction(),
+                    jumpExternalTerminator.bindingId(),
                     effectSummary == null ? toIntArray(promotableSlots) : collectSpillSlots(promotableSlots, effectSummary)
+            );
+        } else if (terminator instanceof LoweredUnit.SuspendActionTerminator suspendActionTerminator) {
+            terminator = new LoweredUnit.SuspendActionTerminator(
+                    suspendActionTerminator.bindingId(),
+                    suspendActionTerminator.continuationBlockIndex(),
+                    toIntArray(promotableSlots)
             );
         }
 

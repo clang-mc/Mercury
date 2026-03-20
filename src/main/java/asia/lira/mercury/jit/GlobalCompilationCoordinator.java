@@ -1,6 +1,7 @@
 package asia.lira.mercury.jit;
 
 import asia.lira.mercury.ir.FunctionIrRegistry;
+import asia.lira.mercury.ir.FunctionActionCaptureRegistry;
 import asia.lira.mercury.ir.FunctionParseCaptureRegistry;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.function.CommandFunction;
@@ -26,6 +27,7 @@ public final class GlobalCompilationCoordinator {
     public void beginReload(Map<Identifier, List<String>> rawSources) {
         this.rawSources = Map.copyOf(rawSources);
         FunctionParseCaptureRegistry.getInstance().beginReload(rawSources.keySet());
+        FunctionActionCaptureRegistry.getInstance().beginReload(rawSources.keySet());
     }
 
     public Map<Identifier, CommandFunction<ServerCommandSource>> finishReload(Map<Identifier, CommandFunction<ServerCommandSource>> loadedFunctions) {
@@ -56,6 +58,7 @@ public final class GlobalCompilationCoordinator {
         }
 
         FunctionParseCaptureRegistry.getInstance().clear();
+        FunctionActionCaptureRegistry.getInstance().clear();
         this.rawSources = Map.of();
         return Map.copyOf(wrapped);
     }

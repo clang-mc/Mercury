@@ -34,16 +34,7 @@ public record BaselineProgram(
         }
 
         public BaselineProgram build() {
-            List<BaselineInstruction> lowered = new ArrayList<>(instructions.size());
-            for (int i = 0; i < instructions.size(); i++) {
-                BaselineInstruction instruction = instructions.get(i);
-                if (i == instructions.size() - 1 && instruction.opCode() == BaselineInstruction.OpCode.CALL) {
-                    lowered.add(BaselineInstruction.jump(instruction.targetFunction(), instruction.sourceText()));
-                    continue;
-                }
-                lowered.add(instruction);
-            }
-            return new BaselineProgram(id, List.copyOf(lowered), List.copyOf(dependencies));
+            return new BaselineProgram(id, List.copyOf(instructions), List.copyOf(dependencies));
         }
     }
 }

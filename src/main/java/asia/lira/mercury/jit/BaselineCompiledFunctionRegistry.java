@@ -29,6 +29,8 @@ public final class BaselineCompiledFunctionRegistry {
 
     public void clear() {
         artifacts.clear();
+        UnknownCommandBindingRegistry.getInstance().clear();
+        SpecializedCommandRegistry.getInstance().clear();
     }
 
     public void rebuild(Collection<FunctionIrRegistry.ParsedFunctionIr> functions) {
@@ -36,6 +38,9 @@ public final class BaselineCompiledFunctionRegistry {
             clear();
             return;
         }
+
+        UnknownCommandBindingRegistry.getInstance().rebuild(functions);
+        SpecializedCommandRegistry.getInstance().rebuild(functions);
 
         Map<Identifier, BaselineProgram.Builder> candidates = new LinkedHashMap<>();
         for (FunctionIrRegistry.ParsedFunctionIr functionIr : functions) {
@@ -110,7 +115,9 @@ public final class BaselineCompiledFunctionRegistry {
                                 BaselineExecutionEngine.ExecutionOutcome.class,
                                 ExecutionFrame.class,
                                 Object.class,
-                                CommandExecutionContext.class
+                                CommandExecutionContext.class,
+                                net.minecraft.command.Frame.class,
+                                int.class
                         )
                 );
                 BaselineBytecodeCompiler.CompiledClassData classData = entry.getValue();
@@ -165,15 +172,6 @@ public final class BaselineCompiledFunctionRegistry {
             visiting.put(id, false);
             return false;
         }
-
-        visiting.put(id, true);
-        for (Identifier dependency : builder.dependencies()) {
-            if (!isCompilable(dependency, candidates, compiled, visiting)) {
-                visiting.put(id, false);
-                return false;
-            }
-        }
-
         return true;
     }
 
@@ -272,7 +270,7 @@ public final class BaselineCompiledFunctionRegistry {
                             }
                         }
                     }
-                    default -> {
+                    case SPECIALIZED, SUSPEND_ACTION, REFLECTIVE_BRIDGE, ACTION_BRIDGE, CALL, JUMP, RETURN_VALUE -> {
                     }
                 }
             }
@@ -346,8 +344,8 @@ public final class BaselineCompiledFunctionRegistry {
             String internalClassName,
             int[] requiredSlots
     ) {
-        public BaselineExecutionEngine.ExecutionOutcome invoke(ExecutionFrame frame, Object source, CommandExecutionContext<?> context) throws Throwable {
-            return (BaselineExecutionEngine.ExecutionOutcome) invokeHandle.invoke(frame, source, context);
+        public BaselineExecutionEngine.ExecutionOutcome invoke(ExecutionFrame frame, Object source, CommandExecutionContext<?> context, net.minecraft.command.Frame commandFrame, int initialState) throws Throwable {
+            return (BaselineExecutionEngine.ExecutionOutcome) invokeHandle.invoke(frame, source, context, commandFrame, initialState);
         }
     }
 

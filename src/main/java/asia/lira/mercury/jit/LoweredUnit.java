@@ -40,7 +40,7 @@ public record LoweredUnit(
         }
     }
 
-    public sealed interface LoweredInstruction permits SetConstInstruction, AddConstInstruction, GetInstruction, ResetInstruction, OperationInstruction, CallInstruction {
+    public sealed interface LoweredInstruction permits SetConstInstruction, AddConstInstruction, GetInstruction, ResetInstruction, OperationInstruction, CallInstruction, ReflectiveBridgeInstruction, ActionBridgeInstruction, SpecializedInstruction {
         String sourceText();
     }
 
@@ -61,6 +61,7 @@ public record LoweredUnit(
 
     public record CallInstruction(
             Identifier targetFunction,
+            int bindingId,
             int[] spillBeforeSlots,
             int[] reloadAfterSlots,
             String sourceText
@@ -71,7 +72,43 @@ public record LoweredUnit(
         }
     }
 
-    public sealed interface LoweredTerminator permits CompleteTerminator, ReturnValueTerminator, JumpLocalTerminator, JumpExternalTerminator {
+    public record ReflectiveBridgeInstruction(
+            int bindingId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots,
+            String sourceText
+    ) implements LoweredInstruction {
+        public ReflectiveBridgeInstruction {
+            spillBeforeSlots = spillBeforeSlots.clone();
+            reloadAfterSlots = reloadAfterSlots.clone();
+        }
+    }
+
+    public record ActionBridgeInstruction(
+            int bindingId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots,
+            String sourceText
+    ) implements LoweredInstruction {
+        public ActionBridgeInstruction {
+            spillBeforeSlots = spillBeforeSlots.clone();
+            reloadAfterSlots = reloadAfterSlots.clone();
+        }
+    }
+
+    public record SpecializedInstruction(
+            int specializedId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots,
+            String sourceText
+    ) implements LoweredInstruction {
+        public SpecializedInstruction {
+            spillBeforeSlots = spillBeforeSlots.clone();
+            reloadAfterSlots = reloadAfterSlots.clone();
+        }
+    }
+
+    public sealed interface LoweredTerminator permits CompleteTerminator, ReturnValueTerminator, JumpLocalTerminator, JumpExternalTerminator, SuspendActionTerminator {
     }
 
     public record CompleteTerminator() implements LoweredTerminator {
@@ -85,9 +122,20 @@ public record LoweredUnit(
 
     public record JumpExternalTerminator(
             Identifier targetFunction,
+            int bindingId,
             int[] spillBeforeSlots
     ) implements LoweredTerminator {
         public JumpExternalTerminator {
+            spillBeforeSlots = spillBeforeSlots.clone();
+        }
+    }
+
+    public record SuspendActionTerminator(
+            int bindingId,
+            int continuationBlockIndex,
+            int[] spillBeforeSlots
+    ) implements LoweredTerminator {
+        public SuspendActionTerminator {
             spillBeforeSlots = spillBeforeSlots.clone();
         }
     }

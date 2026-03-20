@@ -1,6 +1,7 @@
 package asia.lira.mercury.mixin;
 
 import asia.lira.mercury.impl.FastMacro;
+import asia.lira.mercury.ir.FunctionActionCaptureRegistry;
 import asia.lira.mercury.ir.FunctionIrCompiler;
 import asia.lira.mercury.ir.FunctionParseCaptureRegistry;
 import net.minecraft.command.SourcedCommandAction;
@@ -35,6 +36,9 @@ public class MixinFunctionBuilder<T extends AbstractServerCommandSource<T>> {
         FunctionParseCaptureRegistry.getInstance().capture(
                 FunctionIrCompiler.compile(id, this.actions, this.macroLines, this.usedVariables)
         );
+        if (this.actions != null) {
+            FunctionActionCaptureRegistry.getInstance().capture(id, this.actions);
+        }
         if (this.macroLines != null) {
             return new FastMacro<>(id, this.macroLines, this.usedVariables);
         }

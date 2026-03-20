@@ -88,16 +88,20 @@ public final class BaselineBytecodeCompiler {
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
             Map<net.minecraft.util.Identifier, int[]> requiredSlotsById
     ) {
-        String descriptor = "(" + EXECUTION_FRAME_DESC + "Ljava/lang/Object;" + Type.getDescriptor(net.minecraft.command.CommandExecutionContext.class) + ")" + OUTCOME_DESC;
+        String descriptor = "("
+                + EXECUTION_FRAME_DESC
+                + "Ljava/lang/Object;"
+                + Type.getDescriptor(net.minecraft.command.CommandExecutionContext.class)
+                + Type.getDescriptor(net.minecraft.command.Frame.class)
+                + "I"
+                + ")"
+                + OUTCOME_DESC;
         MethodVisitor visitor = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "invoke", descriptor, null, new String[]{"java/lang/Throwable"});
         visitor.visitCode();
 
         for (Map.Entry<Integer, Integer> promoted : unit.promotedSlotLocals().entrySet()) {
             BaselineBytecodeOps.buildInitializePromotedSlot(visitor, promoted.getKey(), promoted.getValue());
         }
-
-        BaselineBytecodeOps.pushInt(visitor, unit.entryIndex());
-        visitor.visitVarInsn(Opcodes.ISTORE, 3);
 
         Label loopStart = new Label();
         Label defaultLabel = new Label();
@@ -107,7 +111,7 @@ public final class BaselineBytecodeCompiler {
         }
 
         visitor.visitLabel(loopStart);
-        visitor.visitVarInsn(Opcodes.ILOAD, 3);
+        visitor.visitVarInsn(Opcodes.ILOAD, 4);
         visitor.visitTableSwitchInsn(0, stateLabels.length - 1, defaultLabel, stateLabels);
 
         for (int i = 0; i < unit.blocks().size(); i++) {
@@ -144,7 +148,13 @@ public final class BaselineBytecodeCompiler {
                 case LoweredUnit.OperationInstruction operation ->
                         emitOperation(visitor, unit, operation.primarySlot(), operation.secondarySlot(), operation.operation());
                 case LoweredUnit.CallInstruction call ->
-                        emitDirectInvoke(visitor, unit, call.targetFunction(), call.spillBeforeSlots(), call.reloadAfterSlots(), internalNames, callSiteCounts, requiredSlotsById, false);
+                        emitDirectInvoke(visitor, unit, call.targetFunction(), call.bindingId(), call.spillBeforeSlots(), call.reloadAfterSlots(), internalNames, callSiteCounts, requiredSlotsById, false);
+                case LoweredUnit.ReflectiveBridgeInstruction reflectiveBridge ->
+                        emitReflectiveBridge(visitor, unit, reflectiveBridge.bindingId(), reflectiveBridge.spillBeforeSlots(), reflectiveBridge.reloadAfterSlots());
+                case LoweredUnit.ActionBridgeInstruction actionBridge ->
+                        emitActionBridge(visitor, unit, actionBridge.bindingId(), actionBridge.spillBeforeSlots(), actionBridge.reloadAfterSlots());
+                case LoweredUnit.SpecializedInstruction specializedInstruction ->
+                        emitSpecialized(visitor, unit, specializedInstruction.specializedId(), specializedInstruction.spillBeforeSlots(), specializedInstruction.reloadAfterSlots());
             }
         }
 
@@ -159,12 +169,16 @@ public final class BaselineBytecodeCompiler {
             }
             case LoweredUnit.JumpLocalTerminator jumpLocal -> {
                 BaselineBytecodeOps.pushInt(visitor, jumpLocal.targetBlockIndex());
-                visitor.visitVarInsn(Opcodes.ISTORE, 3);
+                visitor.visitVarInsn(Opcodes.ISTORE, 4);
                 visitor.visitJumpInsn(Opcodes.GOTO, loopStart);
             }
             case LoweredUnit.JumpExternalTerminator jumpExternal -> {
                 spillAllPromoted(visitor, unit);
-                emitDirectInvoke(visitor, unit, jumpExternal.targetFunction(), jumpExternal.spillBeforeSlots(), new int[0], internalNames, callSiteCounts, requiredSlotsById, true);
+                emitDirectInvoke(visitor, unit, jumpExternal.targetFunction(), jumpExternal.bindingId(), jumpExternal.spillBeforeSlots(), new int[0], internalNames, callSiteCounts, requiredSlotsById, true);
+            }
+            case LoweredUnit.SuspendActionTerminator suspendAction -> {
+                spillPromotedSlots(visitor, unit, suspendAction.spillBeforeSlots());
+                BaselineBytecodeOps.buildSuspend(visitor, suspendAction.bindingId(), suspendAction.continuationBlockIndex());
             }
         }
     }
@@ -209,6 +223,7 @@ public final class BaselineBytecodeCompiler {
             MethodVisitor visitor,
             LoweredUnit unit,
             net.minecraft.util.Identifier targetFunction,
+            int bindingId,
             int[] spillBeforeSlots,
             int[] reloadAfterSlots,
             Map<net.minecraft.util.Identifier, String> internalNames,
@@ -220,12 +235,15 @@ public final class BaselineBytecodeCompiler {
 
         String targetInternalName = internalNames.get(targetFunction);
         if (targetInternalName == null) {
-            if (returnOutcome) {
-                BaselineBytecodeOps.buildExternalJump(visitor, targetFunction.toString());
-            } else {
-                BaselineBytecodeOps.buildCall(visitor, targetFunction.toString());
-                reloadPromotedSlots(visitor, unit, reloadAfterSlots);
+            if (bindingId < 0) {
+                throw new IllegalStateException("Missing fallback binding for unresolved call target " + targetFunction + " in " + unit.entryId());
             }
+            BaselineBytecodeOps.buildInvokeActionFallback(visitor, bindingId);
+            if (returnOutcome) {
+                spillAllPromoted(visitor, unit);
+                BaselineBytecodeOps.buildCompleted(visitor);
+            }
+            reloadPromotedSlots(visitor, unit, reloadAfterSlots);
             return;
         }
 
@@ -240,6 +258,42 @@ public final class BaselineBytecodeCompiler {
         if (!returnOutcome) {
             reloadPromotedSlots(visitor, unit, reloadAfterSlots);
         }
+    }
+
+    private static void emitReflectiveBridge(
+            MethodVisitor visitor,
+            LoweredUnit unit,
+            int bindingId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots
+    ) {
+        spillPromotedSlots(visitor, unit, spillBeforeSlots);
+        BaselineBytecodeOps.buildInvokeBoundCommand(visitor, bindingId);
+        reloadPromotedSlots(visitor, unit, reloadAfterSlots);
+    }
+
+    private static void emitActionBridge(
+            MethodVisitor visitor,
+            LoweredUnit unit,
+            int bindingId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots
+    ) {
+        spillPromotedSlots(visitor, unit, spillBeforeSlots);
+        BaselineBytecodeOps.buildInvokeActionFallback(visitor, bindingId);
+        reloadPromotedSlots(visitor, unit, reloadAfterSlots);
+    }
+
+    private static void emitSpecialized(
+            MethodVisitor visitor,
+            LoweredUnit unit,
+            int specializedId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots
+    ) {
+        spillPromotedSlots(visitor, unit, spillBeforeSlots);
+        BaselineBytecodeOps.buildInvokeSpecialized(visitor, specializedId);
+        reloadPromotedSlots(visitor, unit, reloadAfterSlots);
     }
 
     private static void spillAllPromoted(MethodVisitor visitor, LoweredUnit unit) {

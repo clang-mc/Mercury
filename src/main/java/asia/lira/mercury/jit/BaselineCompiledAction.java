@@ -1,6 +1,7 @@
 package asia.lira.mercury.jit;
 
 import net.minecraft.command.CommandExecutionContext;
+import net.minecraft.command.CommandQueueEntry;
 import net.minecraft.command.Frame;
 import net.minecraft.command.SourcedCommandAction;
 import net.minecraft.scoreboard.ScoreHolder;
@@ -29,23 +30,73 @@ public final class BaselineCompiledAction<T extends AbstractServerCommandSource<
         }
 
         try {
-            BaselineExecutionEngine.ensureLoaded(current, artifact.requiredSlots());
-            BaselineExecutionEngine.ExecutionOutcome outcome = artifact.invoke(current, source, context);
-            flushDirtySlots(current);
-            if (outcome.mode() == BaselineExecutionEngine.ExecutionOutcome.Mode.RETURN) {
-                frame.succeed(outcome.returnValue());
-                frame.doReturn();
-            }
+            runArtifact(artifact, current, source, context, frame, 0, ownsFrame);
         } catch (Throwable throwable) {
-            throw new RuntimeException("Failed to execute compiled function " + artifact.program().id(), throwable);
-        } finally {
-            if (ownsFrame) {
+            if (ownsFrame && runtime.currentFrame() == current) {
                 runtime.popFrame(current);
             }
+            throw new RuntimeException("Failed to execute compiled function " + artifact.program().id(), throwable);
         }
     }
 
-    private void flushDirtySlots(ExecutionFrame frame) {
+    static <T extends AbstractServerCommandSource<T>> void runArtifact(
+            BaselineCompiledFunctionRegistry.CompiledArtifact artifact,
+            ExecutionFrame executionFrame,
+            T source,
+            CommandExecutionContext<T> context,
+            Frame frame,
+            int initialState,
+            boolean ownsFrame
+    ) throws Throwable {
+        BaselineExecutionEngine.ensureLoaded(executionFrame, artifact.requiredSlots());
+        BaselineExecutionEngine.ExecutionOutcome outcome = artifact.invoke(executionFrame, source, context, frame, initialState);
+        switch (outcome.mode()) {
+            case COMPLETE -> {
+                flushDirtySlots(executionFrame);
+                if (ownsFrame && SynchronizationRuntime.getInstance().currentFrame() == executionFrame) {
+                    SynchronizationRuntime.getInstance().popFrame(executionFrame);
+                }
+            }
+            case RETURN -> {
+                flushDirtySlots(executionFrame);
+                frame.succeed(outcome.returnValue());
+                frame.doReturn();
+                if (ownsFrame && SynchronizationRuntime.getInstance().currentFrame() == executionFrame) {
+                    SynchronizationRuntime.getInstance().popFrame(executionFrame);
+                }
+            }
+            case SUSPEND -> {
+                flushDirtySlots(executionFrame);
+                scheduleSuspension(artifact, executionFrame, source, context, frame, outcome.bindingId(), outcome.nextState(), ownsFrame);
+            }
+            case FALLBACK -> throw new IllegalStateException("Unexpected fallback outcome from compiled artifact " + artifact.program().id());
+        }
+    }
+
+    private static <T extends AbstractServerCommandSource<T>> void scheduleSuspension(
+            BaselineCompiledFunctionRegistry.CompiledArtifact artifact,
+            ExecutionFrame executionFrame,
+            T source,
+            CommandExecutionContext<T> context,
+            Frame frame,
+            int bindingId,
+            int nextState,
+            boolean ownsFrame
+    ) {
+        UnknownCommandBindingRegistry.BindingPlan plan = UnknownCommandBindingRegistry.getInstance().plan(bindingId);
+        if (plan == null || plan.action() == null) {
+            throw new IllegalStateException("Missing action fallback binding " + bindingId + " for suspension");
+        }
+
+        @SuppressWarnings("unchecked")
+        SourcedCommandAction<T> action = (SourcedCommandAction<T>) plan.action();
+        context.enqueueCommand(new CommandQueueEntry<>(frame, action.bind(source)));
+        if (nextState >= 0) {
+            context.enqueueCommand(new CommandQueueEntry<>(frame, new BaselineContinuationAction<>(artifact, executionFrame, source, nextState, ownsFrame)));
+        }
+    }
+
+    static void flushDirtySlots(ExecutionFrame frame) {
         BitSet dirty = frame.dirtySlots();
         Scoreboard scoreboard = asia.lira.mercury.Mercury.SERVER.getScoreboard();
 

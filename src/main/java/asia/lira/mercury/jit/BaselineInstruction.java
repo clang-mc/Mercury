@@ -9,39 +9,56 @@ public record BaselineInstruction(
         int secondarySlot,
         int immediate,
         @Nullable Identifier targetFunction,
+        int bindingId,
         @Nullable String operation,
         String sourceText
 ) {
     public static BaselineInstruction set(int slotId, int value, String sourceText) {
-        return new BaselineInstruction(OpCode.SET_CONST, slotId, -1, value, null, null, sourceText);
+        return new BaselineInstruction(OpCode.SET_CONST, slotId, -1, value, null, -1, null, sourceText);
     }
 
     public static BaselineInstruction add(int slotId, int delta, String sourceText) {
-        return new BaselineInstruction(OpCode.ADD_CONST, slotId, -1, delta, null, null, sourceText);
+        return new BaselineInstruction(OpCode.ADD_CONST, slotId, -1, delta, null, -1, null, sourceText);
     }
 
     public static BaselineInstruction get(int slotId, String sourceText) {
-        return new BaselineInstruction(OpCode.GET, slotId, -1, 0, null, null, sourceText);
+        return new BaselineInstruction(OpCode.GET, slotId, -1, 0, null, -1, null, sourceText);
     }
 
     public static BaselineInstruction reset(int slotId, String sourceText) {
-        return new BaselineInstruction(OpCode.RESET, slotId, -1, 0, null, null, sourceText);
+        return new BaselineInstruction(OpCode.RESET, slotId, -1, 0, null, -1, null, sourceText);
     }
 
     public static BaselineInstruction operation(int targetSlot, int sourceSlot, String operation, String sourceText) {
-        return new BaselineInstruction(OpCode.OPERATION, targetSlot, sourceSlot, 0, null, operation, sourceText);
+        return new BaselineInstruction(OpCode.OPERATION, targetSlot, sourceSlot, 0, null, -1, operation, sourceText);
     }
 
-    public static BaselineInstruction call(Identifier targetFunction, String sourceText) {
-        return new BaselineInstruction(OpCode.CALL, -1, -1, 0, targetFunction, null, sourceText);
+    public static BaselineInstruction call(Identifier targetFunction, int bindingId, String sourceText) {
+        return new BaselineInstruction(OpCode.CALL, -1, -1, 0, targetFunction, bindingId, null, sourceText);
     }
 
-    public static BaselineInstruction jump(Identifier targetFunction, String sourceText) {
-        return new BaselineInstruction(OpCode.JUMP, -1, -1, 0, targetFunction, null, sourceText);
+    public static BaselineInstruction jump(Identifier targetFunction, int bindingId, String sourceText) {
+        return new BaselineInstruction(OpCode.JUMP, -1, -1, 0, targetFunction, bindingId, null, sourceText);
     }
 
     public static BaselineInstruction returnValue(int returnValue, String sourceText) {
-        return new BaselineInstruction(OpCode.RETURN_VALUE, -1, -1, returnValue, null, null, sourceText);
+        return new BaselineInstruction(OpCode.RETURN_VALUE, -1, -1, returnValue, null, -1, null, sourceText);
+    }
+
+    public static BaselineInstruction reflectiveBridge(int bindingId, String sourceText) {
+        return new BaselineInstruction(OpCode.REFLECTIVE_BRIDGE, -1, -1, 0, null, bindingId, null, sourceText);
+    }
+
+    public static BaselineInstruction actionBridge(int bindingId, String sourceText) {
+        return new BaselineInstruction(OpCode.ACTION_BRIDGE, -1, -1, 0, null, bindingId, null, sourceText);
+    }
+
+    public static BaselineInstruction specialized(int specializedId, String sourceText) {
+        return new BaselineInstruction(OpCode.SPECIALIZED, -1, -1, specializedId, null, -1, null, sourceText);
+    }
+
+    public static BaselineInstruction suspendAction(int bindingId, String sourceText) {
+        return new BaselineInstruction(OpCode.SUSPEND_ACTION, -1, -1, 0, null, bindingId, null, sourceText);
     }
 
     public enum OpCode {
@@ -52,6 +69,10 @@ public record BaselineInstruction(
         OPERATION,
         CALL,
         JUMP,
-        RETURN_VALUE
+        RETURN_VALUE,
+        REFLECTIVE_BRIDGE,
+        ACTION_BRIDGE,
+        SPECIALIZED,
+        SUSPEND_ACTION
     }
 }
