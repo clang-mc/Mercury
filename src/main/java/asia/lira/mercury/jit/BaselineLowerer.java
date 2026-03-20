@@ -62,22 +62,13 @@ public final class BaselineLowerer {
                         instruction.sourceText()
                 ));
                 case CALL -> {
-                    if (instruction.bindingId() >= 0 && hasRemaining) {
-                        blocks.add(new LoweredUnit.LoweredBlock(
-                                program.id(),
-                                List.copyOf(currentInstructions),
-                                new LoweredUnit.SuspendActionTerminator(instruction.bindingId(), blocks.size() + 1, new int[0])
-                        ));
-                        currentInstructions = new ArrayList<>();
-                    } else {
-                        currentInstructions.add(new LoweredUnit.CallInstruction(
-                                instruction.targetFunction(),
-                                instruction.bindingId(),
-                                new int[0],
-                                new int[0],
-                                instruction.sourceText()
-                        ));
-                    }
+                    currentInstructions.add(new LoweredUnit.CallInstruction(
+                            instruction.targetFunction(),
+                            instruction.bindingId(),
+                            new int[0],
+                            new int[0],
+                            instruction.sourceText()
+                    ));
                 }
                 case REFLECTIVE_BRIDGE -> currentInstructions.add(new LoweredUnit.ReflectiveBridgeInstruction(
                         instruction.bindingId(),

@@ -59,27 +59,36 @@ public final class BaselineCompiledFunctionRegistry {
 
         artifacts.clear();
         JumpGraph jumpGraph = JumpGraph.build(compiledPrograms);
+        Map<Identifier, LoweredUnit> loweredUnits = new LinkedHashMap<>();
+        for (Identifier id : compiledPrograms.keySet()) {
+            loweredUnits.put(id, BaselineLowerer.lower(
+                    id,
+                    jumpGraph.unitFor(id),
+                    collectRequiredSlots(jumpGraph.unitFor(id))
+            ));
+        }
+
+        LoweredUnitInliner.InlineResult inlineResult = LoweredUnitInliner.inlineAll(loweredUnits);
+        Map<Identifier, LoweredUnit> finalLoweredUnits = new LinkedHashMap<>(inlineResult.units());
+
         Map<Identifier, String> internalNames = new LinkedHashMap<>();
         Map<Identifier, int[]> requiredSlotsById = new LinkedHashMap<>();
-        for (Identifier id : compiledPrograms.keySet()) {
-            internalNames.put(id, BaselineBytecodeCompiler.internalNameFor(id));
-            requiredSlotsById.put(id, collectRequiredSlots(jumpGraph.unitFor(id)));
+        for (Map.Entry<Identifier, LoweredUnit> entry : finalLoweredUnits.entrySet()) {
+            internalNames.put(entry.getKey(), BaselineBytecodeCompiler.internalNameFor(entry.getKey()));
+            requiredSlotsById.put(entry.getKey(), collectRequiredSlots(entry.getValue()));
         }
-        Map<Identifier, Integer> callSiteCounts = collectCallSiteCounts(compiledPrograms, jumpGraph);
-        Set<Identifier> classesWithSharedRequiredSlots = collectClassesWithSharedRequiredSlots(compiledPrograms.keySet(), requiredSlotsById, callSiteCounts);
-        Map<Identifier, SlotEffectSummary> effectSummaries = collectEffectSummaries(compiledPrograms);
-        BaselinePassPipeline passPipeline = new BaselinePassPipeline(List.of(new SlotPromotionPass()));
+        Map<Identifier, Integer> callSiteCounts = collectCallSiteCounts(finalLoweredUnits.values());
+        Set<Identifier> classesWithSharedRequiredSlots = collectClassesWithSharedRequiredSlots(finalLoweredUnits.keySet(), requiredSlotsById, callSiteCounts);
+        Map<Identifier, SlotEffectSummary> effectSummaries = collectEffectSummaries(finalLoweredUnits);
+        BaselinePassPipeline passPipeline = new BaselinePassPipeline(List.of(
+                new UnresolvedCallIsolationPass(),
+                new SlotPromotionPass()
+        ));
 
         Map<Identifier, BaselineBytecodeCompiler.CompiledClassData> compiledClasses = new LinkedHashMap<>();
         Map<Identifier, LoweredUnit> optimizedUnits = new LinkedHashMap<>();
-        for (Map.Entry<Identifier, BaselineProgram> entry : compiledPrograms.entrySet()) {
-            JumpGraph.CompilationUnit unit = jumpGraph.unitFor(entry.getKey());
-            LoweredUnit loweredUnit = BaselineLowerer.lower(
-                    entry.getKey(),
-                    unit,
-                    requiredSlotsById.get(entry.getKey())
-            );
-            LoweredUnit optimizedUnit = passPipeline.apply(loweredUnit, new BaselinePassContext(
+        for (Map.Entry<Identifier, LoweredUnit> entry : finalLoweredUnits.entrySet()) {
+            LoweredUnit optimizedUnit = passPipeline.apply(entry.getValue(), new BaselinePassContext(
                     internalNames,
                     callSiteCounts,
                     requiredSlotsById,
@@ -190,23 +199,37 @@ public final class BaselineCompiledFunctionRegistry {
         return slotIds.stream().mapToInt(Integer::intValue).toArray();
     }
 
+    private static int[] collectRequiredSlots(LoweredUnit unit) {
+        Set<Integer> slotIds = new LinkedHashSet<>();
+        for (LoweredUnit.LoweredBlock block : unit.blocks()) {
+            for (LoweredUnit.LoweredInstruction instruction : block.instructions()) {
+                switch (instruction) {
+                    case LoweredUnit.SetConstInstruction setConst -> slotIds.add(setConst.slotId());
+                    case LoweredUnit.AddConstInstruction addConst -> slotIds.add(addConst.slotId());
+                    case LoweredUnit.GetInstruction get -> slotIds.add(get.slotId());
+                    case LoweredUnit.ResetInstruction reset -> slotIds.add(reset.slotId());
+                    case LoweredUnit.OperationInstruction operation -> {
+                        slotIds.add(operation.primarySlot());
+                        slotIds.add(operation.secondarySlot());
+                    }
+                    default -> {
+                    }
+                }
+            }
+        }
+        return slotIds.stream().mapToInt(Integer::intValue).toArray();
+    }
+
     private static Map<Identifier, Integer> collectCallSiteCounts(
-            Map<Identifier, BaselineProgram> programs,
-            JumpGraph jumpGraph
+            Collection<LoweredUnit> units
     ) {
         Map<Identifier, Integer> callSiteCounts = new LinkedHashMap<>();
-        for (Map.Entry<Identifier, BaselineProgram> entry : programs.entrySet()) {
-            JumpGraph.CompilationUnit unit = jumpGraph.unitFor(entry.getKey());
-            for (BaselineInstruction instruction : entry.getValue().instructions()) {
-                Identifier target = instruction.targetFunction();
-                if (target == null || !programs.containsKey(target)) {
-                    continue;
-                }
-                if (instruction.opCode() == BaselineInstruction.OpCode.JUMP && unit.indexOf(target) >= 0) {
-                    continue;
-                }
-                if (instruction.opCode() == BaselineInstruction.OpCode.CALL || instruction.opCode() == BaselineInstruction.OpCode.JUMP) {
-                    callSiteCounts.merge(target, 1, Integer::sum);
+        for (LoweredUnit unit : units) {
+            for (LoweredUnit.LoweredBlock block : unit.blocks()) {
+                for (LoweredUnit.LoweredInstruction instruction : block.instructions()) {
+                    if (instruction instanceof LoweredUnit.CallInstruction callInstruction) {
+                        callSiteCounts.merge(callInstruction.targetFunction(), 1, Integer::sum);
+                    }
                 }
             }
         }
@@ -229,48 +252,50 @@ public final class BaselineCompiledFunctionRegistry {
         return shared;
     }
 
-    private static Map<Identifier, SlotEffectSummary> collectEffectSummaries(Map<Identifier, BaselineProgram> programs) {
+    private static Map<Identifier, SlotEffectSummary> collectEffectSummaries(Map<Identifier, LoweredUnit> units) {
         Map<Identifier, Set<Integer>> readSets = new LinkedHashMap<>();
         Map<Identifier, Set<Integer>> writeSets = new LinkedHashMap<>();
         Map<Identifier, Set<Integer>> resetSets = new LinkedHashMap<>();
 
-        for (Map.Entry<Identifier, BaselineProgram> entry : programs.entrySet()) {
+        for (Map.Entry<Identifier, LoweredUnit> entry : units.entrySet()) {
             Set<Integer> reads = new LinkedHashSet<>();
             Set<Integer> writes = new LinkedHashSet<>();
             Set<Integer> resets = new LinkedHashSet<>();
 
-            for (BaselineInstruction instruction : entry.getValue().instructions()) {
-                switch (instruction.opCode()) {
-                    case SET_CONST -> writes.add(instruction.primarySlot());
-                    case ADD_CONST -> {
-                        reads.add(instruction.primarySlot());
-                        writes.add(instruction.primarySlot());
-                    }
-                    case GET -> reads.add(instruction.primarySlot());
-                    case RESET -> {
-                        resets.add(instruction.primarySlot());
-                        writes.add(instruction.primarySlot());
-                    }
-                    case OPERATION -> {
-                        switch (instruction.operation()) {
+            for (LoweredUnit.LoweredBlock block : entry.getValue().blocks()) {
+                for (LoweredUnit.LoweredInstruction instruction : block.instructions()) {
+                    switch (instruction) {
+                        case LoweredUnit.SetConstInstruction setConst -> writes.add(setConst.slotId());
+                        case LoweredUnit.AddConstInstruction addConst -> {
+                            reads.add(addConst.slotId());
+                            writes.add(addConst.slotId());
+                        }
+                        case LoweredUnit.GetInstruction get -> reads.add(get.slotId());
+                        case LoweredUnit.ResetInstruction reset -> {
+                            resets.add(reset.slotId());
+                            writes.add(reset.slotId());
+                        }
+                        case LoweredUnit.OperationInstruction operation -> {
+                            switch (operation.operation()) {
                             case "=" -> {
-                                reads.add(instruction.secondarySlot());
-                                writes.add(instruction.primarySlot());
+                                    reads.add(operation.secondarySlot());
+                                    writes.add(operation.primarySlot());
                             }
                             case "><" -> {
-                                reads.add(instruction.primarySlot());
-                                reads.add(instruction.secondarySlot());
-                                writes.add(instruction.primarySlot());
-                                writes.add(instruction.secondarySlot());
+                                    reads.add(operation.primarySlot());
+                                    reads.add(operation.secondarySlot());
+                                    writes.add(operation.primarySlot());
+                                    writes.add(operation.secondarySlot());
                             }
                             default -> {
-                                reads.add(instruction.primarySlot());
-                                reads.add(instruction.secondarySlot());
-                                writes.add(instruction.primarySlot());
+                                    reads.add(operation.primarySlot());
+                                    reads.add(operation.secondarySlot());
+                                    writes.add(operation.primarySlot());
+                                }
                             }
                         }
-                    }
-                    case SPECIALIZED, SUSPEND_ACTION, REFLECTIVE_BRIDGE, ACTION_BRIDGE, CALL, JUMP, RETURN_VALUE -> {
+                        default -> {
+                        }
                     }
                 }
             }
@@ -283,26 +308,28 @@ public final class BaselineCompiledFunctionRegistry {
         boolean changed;
         do {
             changed = false;
-            for (Map.Entry<Identifier, BaselineProgram> entry : programs.entrySet()) {
+            for (Map.Entry<Identifier, LoweredUnit> entry : units.entrySet()) {
                 Set<Integer> reads = readSets.get(entry.getKey());
                 Set<Integer> writes = writeSets.get(entry.getKey());
-                for (BaselineInstruction instruction : entry.getValue().instructions()) {
-                    if (instruction.opCode() != BaselineInstruction.OpCode.CALL || instruction.targetFunction() == null) {
-                        continue;
+                for (LoweredUnit.LoweredBlock block : entry.getValue().blocks()) {
+                    for (LoweredUnit.LoweredInstruction instruction : block.instructions()) {
+                        if (!(instruction instanceof LoweredUnit.CallInstruction callInstruction)) {
+                            continue;
+                        }
+                        SlotEffectSummary calleeSummary = summaryOf(callInstruction.targetFunction(), readSets, writeSets, resetSets);
+                        if (calleeSummary == null) {
+                            continue;
+                        }
+                        changed |= reads.addAll(calleeSummary.readSlots());
+                        changed |= writes.addAll(calleeSummary.writtenSlots());
+                        changed |= writes.addAll(calleeSummary.resetSlots());
                     }
-                    SlotEffectSummary calleeSummary = summaryOf(instruction.targetFunction(), readSets, writeSets, resetSets);
-                    if (calleeSummary == null) {
-                        continue;
-                    }
-                    changed |= reads.addAll(calleeSummary.readSlots());
-                    changed |= writes.addAll(calleeSummary.writtenSlots());
-                    changed |= writes.addAll(calleeSummary.resetSlots());
                 }
             }
         } while (changed);
 
         Map<Identifier, SlotEffectSummary> summaries = new LinkedHashMap<>();
-        for (Identifier id : programs.keySet()) {
+        for (Identifier id : units.keySet()) {
             summaries.put(id, new SlotEffectSummary(
                     readSets.getOrDefault(id, Set.of()),
                     writeSets.getOrDefault(id, Set.of()),
