@@ -1,18 +1,11 @@
 package asia.lira.mercury.jit.specialized.impl.execute;
 
-import asia.lira.mercury.Mercury;
 import asia.lira.mercury.jit.BaselineExecutionEngine;
 import asia.lira.mercury.jit.ExecutionFrame;
 import asia.lira.mercury.jit.JitPreparationRegistry;
 import asia.lira.mercury.jit.specialized.api.SpecializedExecutor;
 import asia.lira.mercury.jit.specialized.impl.data.StorageAccessRuntime;
 import net.minecraft.command.argument.NbtPathArgumentType;
-import net.minecraft.nbt.NbtByte;
-import net.minecraft.nbt.NbtDouble;
-import net.minecraft.nbt.NbtFloat;
-import net.minecraft.nbt.NbtInt;
-import net.minecraft.nbt.NbtLong;
-import net.minecraft.nbt.NbtShort;
 import net.minecraft.predicate.NumberRange;
 import net.minecraft.scoreboard.ReadableScoreboardScore;
 import net.minecraft.scoreboard.ScoreAccess;
@@ -25,11 +18,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class ExecuteExecutor implements SpecializedExecutor<ExecutePlan> {
-    private static final ExecuteExecutor INSTANCE = new ExecuteExecutor();
-
-    public static void executeDirect(ExecutePlan plan, ExecutionFrame frame, ServerCommandSource source) throws Exception {
-        INSTANCE.execute(plan, frame, source);
-    }
 
     @Override
     public void execute(ExecutePlan plan, ExecutionFrame frame, ServerCommandSource source) throws Exception {
@@ -184,7 +172,7 @@ public final class ExecuteExecutor implements SpecializedExecutor<ExecutePlan> {
         }
     }
 
-    private static int applyOperation(int left, int right, String operation) {
+    public static int applyOperation(int left, int right, String operation) {
         return switch (operation) {
             case "=" -> right;
             case "+=" -> left + right;
@@ -220,23 +208,8 @@ public final class ExecuteExecutor implements SpecializedExecutor<ExecutePlan> {
     ) implements PendingStore {
         @Override
         public void apply(ExecutionFrame frame, ServerCommandSource source, CommandResult result) throws Exception {
-            net.minecraft.nbt.NbtCompound root = Mercury.SERVER.getDataCommandStorage().get(storageId).copy();
             int value = requestResult ? result.returnValue() : (result.successful() ? 1 : 0);
-            path.put(root, wrapNumber(value, numericType, scale));
-            Mercury.SERVER.getDataCommandStorage().set(storageId, root);
-        }
-
-        private static net.minecraft.nbt.NbtElement wrapNumber(int value, String numericType, double scale) {
-            double scaled = value * scale;
-            return switch (numericType) {
-                case "byte" -> NbtByte.of((byte) scaled);
-                case "short" -> NbtShort.of((short) scaled);
-                case "int" -> NbtInt.of((int) scaled);
-                case "long" -> NbtLong.of((long) scaled);
-                case "float" -> NbtFloat.of((float) scaled);
-                case "double" -> NbtDouble.of(scaled);
-                default -> NbtInt.of((int) scaled);
-            };
+            StorageAccessRuntime.writeNumericValue(storageId, path, numericType, scale, value);
         }
     }
 }

@@ -5,11 +5,6 @@ import asia.lira.mercury.jit.specialized.api.SpecializedExecutor;
 import net.minecraft.server.command.ServerCommandSource;
 
 public final class DataModifyStorageExecutor implements SpecializedExecutor<DataModifyStoragePlan> {
-    private static final DataModifyStorageExecutor INSTANCE = new DataModifyStorageExecutor();
-
-    public static void executeDirect(DataModifyStoragePlan plan, ExecutionFrame frame, ServerCommandSource source) throws Exception {
-        INSTANCE.execute(plan, frame, source);
-    }
 
     @Override
     public void execute(DataModifyStoragePlan plan, ExecutionFrame frame, ServerCommandSource source) throws Exception {

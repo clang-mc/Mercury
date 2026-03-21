@@ -7,8 +7,14 @@ import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import net.minecraft.command.DataCommandStorage;
 import net.minecraft.command.argument.NbtPathArgumentType;
+import net.minecraft.nbt.NbtByte;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.NbtDouble;
 import net.minecraft.nbt.NbtElement;
+import net.minecraft.nbt.NbtFloat;
+import net.minecraft.nbt.NbtInt;
+import net.minecraft.nbt.NbtLong;
+import net.minecraft.nbt.NbtShort;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 
@@ -70,6 +76,18 @@ public final class StorageAccessRuntime {
         return mergeElements(targetStorageId, targetPath, values);
     }
 
+    public static void writeNumericValue(
+            Identifier storageId,
+            NbtPathArgumentType.NbtPath path,
+            String numericType,
+            double scale,
+            int value
+    ) throws CommandSyntaxException {
+        NbtCompound root = getMutable(storageId);
+        path.put(root, wrapNumber(value, numericType, scale));
+        save(storageId, root);
+    }
+
     private static int mergeElements(Identifier storageId, NbtPathArgumentType.NbtPath targetPath, Collection<NbtElement> elements) throws CommandSyntaxException {
         NbtCompound merged = new NbtCompound();
         for (NbtElement element : elements) {
@@ -105,5 +123,18 @@ public final class StorageAccessRuntime {
 
     private static void save(Identifier storageId, NbtCompound root) {
         Mercury.SERVER.getDataCommandStorage().set(storageId, root);
+    }
+
+    private static NbtElement wrapNumber(int value, String numericType, double scale) {
+        double scaled = value * scale;
+        return switch (numericType) {
+            case "byte" -> NbtByte.of((byte) scaled);
+            case "short" -> NbtShort.of((short) scaled);
+            case "int" -> NbtInt.of((int) scaled);
+            case "long" -> NbtLong.of((long) scaled);
+            case "float" -> NbtFloat.of((float) scaled);
+            case "double" -> NbtDouble.of(scaled);
+            default -> NbtInt.of((int) scaled);
+        };
     }
 }

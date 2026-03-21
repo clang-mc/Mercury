@@ -1,10 +1,9 @@
 package asia.lira.mercury.jit;
 
 import asia.lira.mercury.jit.specialized.api.SpecializedPlan;
+import asia.lira.mercury.jit.specialized.api.SpecializedEmitContext;
 import asia.lira.mercury.jit.specialized.core.SpecializedCommandRegistry;
-import asia.lira.mercury.jit.specialized.impl.data.DataModifyStorageExecutor;
 import asia.lira.mercury.jit.specialized.impl.data.DataModifyStoragePlan;
-import asia.lira.mercury.jit.specialized.impl.execute.ExecuteExecutor;
 import asia.lira.mercury.jit.specialized.impl.execute.ExecutePlan;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Label;
@@ -332,17 +331,7 @@ public final class BaselineBytecodeCompiler {
         if (fieldSpec == null) {
             throw new IllegalStateException("Missing specialized field for plan " + specializedId + " in " + unit.entryId());
         }
-        visitor.visitFieldInsn(Opcodes.GETSTATIC, ownerInternalName, fieldSpec.fieldName(), fieldSpec.planDescriptor());
-        visitor.visitVarInsn(Opcodes.ALOAD, 0);
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
-        visitor.visitTypeInsn(Opcodes.CHECKCAST, Type.getInternalName(net.minecraft.server.command.ServerCommandSource.class));
-        visitor.visitMethodInsn(
-                Opcodes.INVOKESTATIC,
-                fieldSpec.executorOwner(),
-                fieldSpec.executorMethod(),
-                fieldSpec.executorDescriptor(),
-                false
-        );
+        fieldSpec.plan().emitBytecode(new SpecializedEmitContext(visitor, ownerInternalName, fieldSpec.fieldName(), fieldSpec.planDescriptor()));
         reloadPromotedSlots(visitor, unit, reloadAfterSlots);
     }
 
@@ -367,9 +356,7 @@ public final class BaselineBytecodeCompiler {
                     "SPECIALIZED_PLAN_" + specializedId,
                     Type.getDescriptor(ExecutePlan.class),
                     Type.getInternalName(ExecutePlan.class),
-                    Type.getInternalName(ExecuteExecutor.class),
-                    "executeDirect",
-                    "(" + Type.getDescriptor(ExecutePlan.class) + EXECUTION_FRAME_DESC + Type.getDescriptor(net.minecraft.server.command.ServerCommandSource.class) + ")V"
+                    plan
             );
         }
         if (plan instanceof DataModifyStoragePlan) {
@@ -378,9 +365,7 @@ public final class BaselineBytecodeCompiler {
                     "SPECIALIZED_PLAN_" + specializedId,
                     Type.getDescriptor(DataModifyStoragePlan.class),
                     Type.getInternalName(DataModifyStoragePlan.class),
-                    Type.getInternalName(DataModifyStorageExecutor.class),
-                    "executeDirect",
-                    "(" + Type.getDescriptor(DataModifyStoragePlan.class) + EXECUTION_FRAME_DESC + Type.getDescriptor(net.minecraft.server.command.ServerCommandSource.class) + ")V"
+                    plan
             );
         }
         throw new IllegalStateException("Unsupported specialized plan type " + plan.getClass().getName());
@@ -444,9 +429,7 @@ public final class BaselineBytecodeCompiler {
             String fieldName,
             String planDescriptor,
             String planInternalName,
-            String executorOwner,
-            String executorMethod,
-            String executorDescriptor
+            SpecializedPlan plan
     ) {
     }
 }
