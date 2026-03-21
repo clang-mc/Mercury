@@ -57,10 +57,6 @@ public final class BaselineExecutionEngine {
         invokeActionFallbackInternal(bindingId, source, context, commandFrame);
     }
 
-    public static void invokeSpecialized(int specializedId, ExecutionFrame frame, net.minecraft.server.command.ServerCommandSource source) throws Throwable {
-        invokeSpecializedInternal(specializedId, frame, source);
-    }
-
     public static void ensureLoaded(ExecutionFrame frame, int[] slotIds) {
         for (int slotId : slotIds) {
             readSlot(frame, slotId);
@@ -157,14 +153,6 @@ public final class BaselineExecutionEngine {
             throw new IllegalStateException("Missing frame for action fallback " + bindingId);
         }
         UnknownCommandBindingRegistry.getInstance().invokeActionFallback(bindingId, typedSource, context, commandFrame);
-    }
-
-    private static void invokeSpecializedInternal(
-            int specializedId,
-            ExecutionFrame frame,
-            net.minecraft.server.command.ServerCommandSource source
-    ) throws Throwable {
-        SpecializedRuntime.invoke(specializedId, frame, source);
     }
 
     @SuppressWarnings("unchecked")

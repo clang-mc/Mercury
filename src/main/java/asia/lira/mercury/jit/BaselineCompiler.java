@@ -1,6 +1,7 @@
 package asia.lira.mercury.jit;
 
 import asia.lira.mercury.ir.FunctionIrRegistry;
+import asia.lira.mercury.jit.specialized.core.SpecializedCommandRegistry;
 import net.minecraft.util.Identifier;
 import org.jetbrains.annotations.Nullable;
 

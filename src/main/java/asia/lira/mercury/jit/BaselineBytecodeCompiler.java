@@ -1,11 +1,18 @@
 package asia.lira.mercury.jit;
 
+import asia.lira.mercury.jit.specialized.api.SpecializedPlan;
+import asia.lira.mercury.jit.specialized.core.SpecializedCommandRegistry;
+import asia.lira.mercury.jit.specialized.impl.data.DataModifyStorageExecutor;
+import asia.lira.mercury.jit.specialized.impl.data.DataModifyStoragePlan;
+import asia.lira.mercury.jit.specialized.impl.execute.ExecuteExecutor;
+import asia.lira.mercury.jit.specialized.impl.execute.ExecutePlan;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -43,6 +50,7 @@ public final class BaselineBytecodeCompiler {
             Map<net.minecraft.util.Identifier, int[]> requiredSlotsById,
             Set<net.minecraft.util.Identifier> classesWithSharedRequiredSlots
     ) {
+        Map<Integer, SpecializedFieldSpec> specializedFields = collectSpecializedFields(unit);
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
         writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER, internalName, null, "java/lang/Object", null);
 
@@ -50,12 +58,15 @@ public final class BaselineBytecodeCompiler {
         if (emitRequiredSlotsField) {
             writer.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL, REQUIRED_SLOTS_FIELD, "[I", null, null).visitEnd();
         }
+        for (SpecializedFieldSpec fieldSpec : specializedFields.values()) {
+            writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL, fieldSpec.fieldName(), fieldSpec.planDescriptor(), null, null).visitEnd();
+        }
 
         emitConstructor(writer);
-        if (emitRequiredSlotsField) {
-            emitClassInitializer(writer, internalName, unit.requiredSlots());
+        if (emitRequiredSlotsField || !specializedFields.isEmpty()) {
+            emitClassInitializer(writer, internalName, unit.requiredSlots(), emitRequiredSlotsField, specializedFields);
         }
-        emitInvoke(writer, unit, internalNames, callSiteCounts, requiredSlotsById);
+        emitInvoke(writer, unit, internalNames, callSiteCounts, requiredSlotsById, specializedFields);
 
         writer.visitEnd();
         return writer.toByteArray();
@@ -71,11 +82,31 @@ public final class BaselineBytecodeCompiler {
         visitor.visitEnd();
     }
 
-    private static void emitClassInitializer(ClassWriter writer, String internalName, int[] requiredSlots) {
+    private static void emitClassInitializer(
+            ClassWriter writer,
+            String internalName,
+            int[] requiredSlots,
+            boolean emitRequiredSlotsField,
+            Map<Integer, SpecializedFieldSpec> specializedFields
+    ) {
         MethodVisitor visitor = writer.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null);
         visitor.visitCode();
-        BaselineBytecodeOps.buildIntArray(visitor, requiredSlots);
-        visitor.visitFieldInsn(Opcodes.PUTSTATIC, internalName, REQUIRED_SLOTS_FIELD, "[I");
+        if (emitRequiredSlotsField) {
+            BaselineBytecodeOps.buildIntArray(visitor, requiredSlots);
+            visitor.visitFieldInsn(Opcodes.PUTSTATIC, internalName, REQUIRED_SLOTS_FIELD, "[I");
+        }
+        for (SpecializedFieldSpec fieldSpec : specializedFields.values()) {
+            BaselineBytecodeOps.pushInt(visitor, fieldSpec.specializedId());
+            visitor.visitMethodInsn(
+                    Opcodes.INVOKESTATIC,
+                    Type.getInternalName(SpecializedCommandRegistry.class),
+                    "requirePlan",
+                    "(I)" + Type.getDescriptor(SpecializedPlan.class),
+                    false
+            );
+            visitor.visitTypeInsn(Opcodes.CHECKCAST, fieldSpec.planInternalName());
+            visitor.visitFieldInsn(Opcodes.PUTSTATIC, internalName, fieldSpec.fieldName(), fieldSpec.planDescriptor());
+        }
         visitor.visitInsn(Opcodes.RETURN);
         visitor.visitMaxs(0, 0);
         visitor.visitEnd();
@@ -86,7 +117,8 @@ public final class BaselineBytecodeCompiler {
             LoweredUnit unit,
             Map<net.minecraft.util.Identifier, String> internalNames,
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
-            Map<net.minecraft.util.Identifier, int[]> requiredSlotsById
+            Map<net.minecraft.util.Identifier, int[]> requiredSlotsById,
+            Map<Integer, SpecializedFieldSpec> specializedFields
     ) {
         String descriptor = "("
                 + EXECUTION_FRAME_DESC
@@ -112,11 +144,11 @@ public final class BaselineBytecodeCompiler {
 
         visitor.visitLabel(loopStart);
         visitor.visitVarInsn(Opcodes.ILOAD, 4);
-        visitor.visitTableSwitchInsn(0, stateLabels.length - 1, defaultLabel, stateLabels);
+            visitor.visitTableSwitchInsn(0, stateLabels.length - 1, defaultLabel, stateLabels);
 
         for (int i = 0; i < unit.blocks().size(); i++) {
             visitor.visitLabel(stateLabels[i]);
-            emitBlock(visitor, unit, unit.blocks().get(i), loopStart, internalNames, callSiteCounts, requiredSlotsById);
+            emitBlock(visitor, unit, unit.blocks().get(i), loopStart, internalNames, callSiteCounts, requiredSlotsById, specializedFields, internalNameFor(unit.entryId()));
         }
 
         visitor.visitLabel(defaultLabel);
@@ -133,7 +165,9 @@ public final class BaselineBytecodeCompiler {
             Label loopStart,
             Map<net.minecraft.util.Identifier, String> internalNames,
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
-            Map<net.minecraft.util.Identifier, int[]> requiredSlotsById
+            Map<net.minecraft.util.Identifier, int[]> requiredSlotsById,
+            Map<Integer, SpecializedFieldSpec> specializedFields,
+            String ownerInternalName
     ) {
         for (LoweredUnit.LoweredInstruction instruction : block.instructions()) {
             switch (instruction) {
@@ -154,7 +188,7 @@ public final class BaselineBytecodeCompiler {
                 case LoweredUnit.ActionBridgeInstruction actionBridge ->
                         emitActionBridge(visitor, unit, actionBridge.bindingId(), actionBridge.spillBeforeSlots(), actionBridge.reloadAfterSlots());
                 case LoweredUnit.SpecializedInstruction specializedInstruction ->
-                        emitSpecialized(visitor, unit, specializedInstruction.specializedId(), specializedInstruction.spillBeforeSlots(), specializedInstruction.reloadAfterSlots());
+                        emitSpecialized(visitor, unit, specializedInstruction.specializedId(), specializedInstruction.spillBeforeSlots(), specializedInstruction.reloadAfterSlots(), specializedFields, ownerInternalName);
             }
         }
 
@@ -289,11 +323,67 @@ public final class BaselineBytecodeCompiler {
             LoweredUnit unit,
             int specializedId,
             int[] spillBeforeSlots,
-            int[] reloadAfterSlots
+            int[] reloadAfterSlots,
+            Map<Integer, SpecializedFieldSpec> specializedFields,
+            String ownerInternalName
     ) {
         spillPromotedSlots(visitor, unit, spillBeforeSlots);
-        BaselineBytecodeOps.buildInvokeSpecialized(visitor, specializedId);
+        SpecializedFieldSpec fieldSpec = specializedFields.get(specializedId);
+        if (fieldSpec == null) {
+            throw new IllegalStateException("Missing specialized field for plan " + specializedId + " in " + unit.entryId());
+        }
+        visitor.visitFieldInsn(Opcodes.GETSTATIC, ownerInternalName, fieldSpec.fieldName(), fieldSpec.planDescriptor());
+        visitor.visitVarInsn(Opcodes.ALOAD, 0);
+        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitTypeInsn(Opcodes.CHECKCAST, Type.getInternalName(net.minecraft.server.command.ServerCommandSource.class));
+        visitor.visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                fieldSpec.executorOwner(),
+                fieldSpec.executorMethod(),
+                fieldSpec.executorDescriptor(),
+                false
+        );
         reloadPromotedSlots(visitor, unit, reloadAfterSlots);
+    }
+
+    private static Map<Integer, SpecializedFieldSpec> collectSpecializedFields(LoweredUnit unit) {
+        Map<Integer, SpecializedFieldSpec> fieldSpecs = new LinkedHashMap<>();
+        for (LoweredUnit.LoweredBlock block : unit.blocks()) {
+            for (LoweredUnit.LoweredInstruction instruction : block.instructions()) {
+                if (!(instruction instanceof LoweredUnit.SpecializedInstruction specializedInstruction)) {
+                    continue;
+                }
+                fieldSpecs.computeIfAbsent(specializedInstruction.specializedId(), BaselineBytecodeCompiler::specializedFieldSpec);
+            }
+        }
+        return fieldSpecs;
+    }
+
+    private static SpecializedFieldSpec specializedFieldSpec(int specializedId) {
+        SpecializedPlan plan = SpecializedCommandRegistry.requirePlan(specializedId);
+        if (plan instanceof ExecutePlan) {
+            return new SpecializedFieldSpec(
+                    specializedId,
+                    "SPECIALIZED_PLAN_" + specializedId,
+                    Type.getDescriptor(ExecutePlan.class),
+                    Type.getInternalName(ExecutePlan.class),
+                    Type.getInternalName(ExecuteExecutor.class),
+                    "executeDirect",
+                    "(" + Type.getDescriptor(ExecutePlan.class) + EXECUTION_FRAME_DESC + Type.getDescriptor(net.minecraft.server.command.ServerCommandSource.class) + ")V"
+            );
+        }
+        if (plan instanceof DataModifyStoragePlan) {
+            return new SpecializedFieldSpec(
+                    specializedId,
+                    "SPECIALIZED_PLAN_" + specializedId,
+                    Type.getDescriptor(DataModifyStoragePlan.class),
+                    Type.getInternalName(DataModifyStoragePlan.class),
+                    Type.getInternalName(DataModifyStorageExecutor.class),
+                    "executeDirect",
+                    "(" + Type.getDescriptor(DataModifyStoragePlan.class) + EXECUTION_FRAME_DESC + Type.getDescriptor(net.minecraft.server.command.ServerCommandSource.class) + ")V"
+            );
+        }
+        throw new IllegalStateException("Unsupported specialized plan type " + plan.getClass().getName());
     }
 
     private static void spillAllPromoted(MethodVisitor visitor, LoweredUnit unit) {
@@ -346,6 +436,17 @@ public final class BaselineBytecodeCompiler {
             String internalName,
             byte[] classBytes,
             int[] requiredSlots
+    ) {
+    }
+
+    private record SpecializedFieldSpec(
+            int specializedId,
+            String fieldName,
+            String planDescriptor,
+            String planInternalName,
+            String executorOwner,
+            String executorMethod,
+            String executorDescriptor
     ) {
     }
 }

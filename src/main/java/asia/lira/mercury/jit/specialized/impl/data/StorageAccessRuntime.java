@@ -1,4 +1,4 @@
-package asia.lira.mercury.jit;
+package asia.lira.mercury.jit.specialized.impl.data;
 
 import asia.lira.mercury.Mercury;
 import com.google.common.collect.Iterables;

@@ -1,26 +1,21 @@
-package asia.lira.mercury.jit;
+package asia.lira.mercury.jit.specialized.impl.execute;
 
-import asia.lira.mercury.ir.FunctionIrRegistry;
+import asia.lira.mercury.jit.specialized.api.SpecializationAnalyzer;
+import asia.lira.mercury.jit.specialized.api.SpecializedPlan;
 import com.mojang.brigadier.StringReader;
 import net.minecraft.command.argument.NbtPathArgumentType;
 import net.minecraft.command.argument.NumberRangeArgumentType;
-import net.minecraft.nbt.NbtElement;
 import net.minecraft.nbt.StringNbtReader;
 import net.minecraft.predicate.NumberRange;
 import net.minecraft.util.Identifier;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public final class SpecializedCommandRegistry {
-    private static final SpecializedCommandRegistry INSTANCE = new SpecializedCommandRegistry();
-
+public final class ExecuteAnalyzer implements SpecializationAnalyzer {
     private static final Pattern SCOREBOARD_SET_PATTERN = Pattern.compile("^scoreboard\\s+players\\s+set\\s+(\\S+)\\s+(\\S+)\\s+(-?\\d+)$");
     private static final Pattern SCOREBOARD_ADD_PATTERN = Pattern.compile("^scoreboard\\s+players\\s+add\\s+(\\S+)\\s+(\\S+)\\s+(-?\\d+)$");
     private static final Pattern SCOREBOARD_REMOVE_PATTERN = Pattern.compile("^scoreboard\\s+players\\s+remove\\s+(\\S+)\\s+(\\S+)\\s+(-?\\d+)$");
@@ -36,59 +31,12 @@ public final class SpecializedCommandRegistry {
     private static final Pattern EXECUTE_STORE_SCORE_PATTERN = Pattern.compile("^store\\s+(result|success)\\s+score\\s+(\\S+)\\s+(\\S+)(?:\\s+(.*))?$");
     private static final Pattern EXECUTE_STORE_STORAGE_PATTERN = Pattern.compile("^store\\s+(result|success)\\s+storage\\s+(\\S+)\\s+(\\S+)\\s+(byte|short|int|long|float|double)\\s+(-?(?:\\d+|\\d+\\.\\d+|\\.\\d+))(?:\\s+(.*))?$");
 
-    private final Map<BindingKey, Integer> idsByKey = new LinkedHashMap<>();
-    private final Map<Integer, SpecializedPlan> plansById = new LinkedHashMap<>();
-
-    private SpecializedCommandRegistry() {
-    }
-
-    public static SpecializedCommandRegistry getInstance() {
-        return INSTANCE;
-    }
-
-    public void clear() {
-        idsByKey.clear();
-        plansById.clear();
-    }
-
-    public void rebuild(Collection<FunctionIrRegistry.ParsedFunctionIr> functions) {
-        clear();
-
-        int nextId = 0;
-        for (FunctionIrRegistry.ParsedFunctionIr functionIr : functions) {
-            for (int nodeIndex = 0; nodeIndex < functionIr.nodes().size(); nodeIndex++) {
-                if (!(functionIr.nodes().get(nodeIndex) instanceof FunctionIrRegistry.CommandParseNode commandNode)) {
-                    continue;
-                }
-
-                SpecializedPlan plan = analyze(commandNode.sourceText());
-                if (plan == null) {
-                    continue;
-                }
-
-                idsByKey.put(new BindingKey(functionIr.id(), nodeIndex), nextId);
-                plansById.put(nextId, plan);
-                nextId++;
-            }
+    @Override
+    public @Nullable SpecializedPlan analyze(String sourceText) {
+        if (!sourceText.startsWith("execute ")) {
+            return null;
         }
-    }
 
-    public @Nullable Integer specializedId(Identifier functionId, int nodeIndex) {
-        return idsByKey.get(new BindingKey(functionId, nodeIndex));
-    }
-
-    public @Nullable SpecializedPlan plan(int id) {
-        return plansById.get(id);
-    }
-
-    private static @Nullable SpecializedPlan analyze(String sourceText) {
-        if (sourceText.startsWith("execute ")) {
-            return parseExecute(sourceText);
-        }
-        return parseTerminal(sourceText);
-    }
-
-    private static @Nullable SpecializedPlan parseExecute(String sourceText) {
         String remaining = sourceText.substring("execute ".length()).trim();
         List<ExecuteModifier> modifiers = new ArrayList<>();
 
@@ -152,7 +100,7 @@ public final class SpecializedCommandRegistry {
             return null;
         }
 
-        SpecializedPlan terminal = parseTerminal(remaining.substring("run ".length()).trim());
+        ExecuteTerminal terminal = parseTerminal(remaining.substring("run ".length()).trim());
         if (terminal == null) {
             return null;
         }
@@ -163,45 +111,48 @@ public final class SpecializedCommandRegistry {
         return value == null ? "" : value.trim();
     }
 
-    private static @Nullable SpecializedPlan parseTerminal(String sourceText) {
+    private static @Nullable ExecuteTerminal parseTerminal(String sourceText) {
         Matcher matcher = SCOREBOARD_SET_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
-            return new ScoreSetPlan(sourceText, matcher.group(1), matcher.group(2), Integer.parseInt(matcher.group(3)));
+            return new ScoreTerminalPlan(sourceText, ScoreTerminalPlan.Operation.SET, matcher.group(1), matcher.group(2), Integer.parseInt(matcher.group(3)), null, null, null);
         }
 
         matcher = SCOREBOARD_ADD_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
-            return new ScoreAddPlan(sourceText, matcher.group(1), matcher.group(2), Integer.parseInt(matcher.group(3)));
+            return new ScoreTerminalPlan(sourceText, ScoreTerminalPlan.Operation.ADD, matcher.group(1), matcher.group(2), Integer.parseInt(matcher.group(3)), null, null, null);
         }
 
         matcher = SCOREBOARD_REMOVE_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
-            return new ScoreAddPlan(sourceText, matcher.group(1), matcher.group(2), -Integer.parseInt(matcher.group(3)));
+            return new ScoreTerminalPlan(sourceText, ScoreTerminalPlan.Operation.ADD, matcher.group(1), matcher.group(2), -Integer.parseInt(matcher.group(3)), null, null, null);
         }
 
         matcher = SCOREBOARD_GET_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
-            return new ScoreGetPlan(sourceText, matcher.group(1), matcher.group(2));
+            return new ScoreTerminalPlan(sourceText, ScoreTerminalPlan.Operation.GET, matcher.group(1), matcher.group(2), 0, null, null, null);
         }
 
         matcher = SCOREBOARD_RESET_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
-            return new ScoreResetPlan(sourceText, matcher.group(1), matcher.group(2));
+            return new ScoreTerminalPlan(sourceText, ScoreTerminalPlan.Operation.RESET, matcher.group(1), matcher.group(2), 0, null, null, null);
         }
 
         matcher = SCOREBOARD_OPERATION_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
-            return new ScoreOperationPlan(sourceText, matcher.group(1), matcher.group(2), matcher.group(3), matcher.group(4), matcher.group(5));
+            return new ScoreTerminalPlan(sourceText, ScoreTerminalPlan.Operation.SCORE_OPERATION, matcher.group(1), matcher.group(2), 0, matcher.group(4), matcher.group(5), matcher.group(3));
         }
 
         matcher = DATA_MODIFY_STORAGE_SET_VALUE_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
             try {
-                return new DataModifyStorageSetValuePlan(
+                return new DataStorageTerminalPlan(
                         sourceText,
+                        DataStorageTerminalPlan.Operation.SET_VALUE,
                         Identifier.of(matcher.group(1)),
                         parsePath(matcher.group(2)),
-                        StringNbtReader.parse(matcher.group(3))
+                        StringNbtReader.parse(matcher.group(3)),
+                        null,
+                        null
                 );
             } catch (Exception exception) {
                 return null;
@@ -211,10 +162,12 @@ public final class SpecializedCommandRegistry {
         matcher = DATA_MODIFY_STORAGE_SET_FROM_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
             try {
-                return new DataModifyStorageSetFromPlan(
+                return new DataStorageTerminalPlan(
                         sourceText,
+                        DataStorageTerminalPlan.Operation.SET_FROM_STORAGE,
                         Identifier.of(matcher.group(1)),
                         parsePath(matcher.group(2)),
+                        null,
                         Identifier.of(matcher.group(3)),
                         parsePath(matcher.group(4))
                 );
@@ -226,11 +179,14 @@ public final class SpecializedCommandRegistry {
         matcher = DATA_MODIFY_STORAGE_MERGE_VALUE_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
             try {
-                return new DataModifyStorageMergeValuePlan(
+                return new DataStorageTerminalPlan(
                         sourceText,
+                        DataStorageTerminalPlan.Operation.MERGE_VALUE,
                         Identifier.of(matcher.group(1)),
                         parsePath(matcher.group(2)),
-                        StringNbtReader.parse(matcher.group(3))
+                        StringNbtReader.parse(matcher.group(3)),
+                        null,
+                        null
                 );
             } catch (Exception exception) {
                 return null;
@@ -240,10 +196,12 @@ public final class SpecializedCommandRegistry {
         matcher = DATA_MODIFY_STORAGE_MERGE_FROM_PATTERN.matcher(sourceText);
         if (matcher.matches()) {
             try {
-                return new DataModifyStorageMergeFromPlan(
+                return new DataStorageTerminalPlan(
                         sourceText,
+                        DataStorageTerminalPlan.Operation.MERGE_FROM_STORAGE,
                         Identifier.of(matcher.group(1)),
                         parsePath(matcher.group(2)),
+                        null,
                         Identifier.of(matcher.group(3)),
                         parsePath(matcher.group(4))
                 );
@@ -261,93 +219,5 @@ public final class SpecializedCommandRegistry {
 
     private static NumberRange.IntRange parseRange(String expression) throws Exception {
         return NumberRangeArgumentType.intRange().parse(new StringReader(expression));
-    }
-
-    private record BindingKey(Identifier functionId, int nodeIndex) {
-    }
-
-    public sealed interface SpecializedPlan permits ExecutePlan, ScoreSetPlan, ScoreAddPlan, ScoreGetPlan, ScoreResetPlan, ScoreOperationPlan,
-            DataModifyStorageSetValuePlan, DataModifyStorageSetFromPlan, DataModifyStorageMergeValuePlan, DataModifyStorageMergeFromPlan {
-        String sourceText();
-    }
-
-    public record ExecutePlan(String sourceText, List<ExecuteModifier> modifiers, SpecializedPlan terminal) implements SpecializedPlan {
-    }
-
-    public sealed interface ExecuteModifier permits IfScoreCompareModifier, IfScoreMatchesModifier, StoreScoreModifier, StoreStorageModifier {
-    }
-
-    public record IfScoreCompareModifier(String targetHolder, String targetObjective, String operator, String sourceHolder, String sourceObjective) implements ExecuteModifier {
-    }
-
-    public record IfScoreMatchesModifier(String targetHolder, String targetObjective, NumberRange.IntRange range) implements ExecuteModifier {
-    }
-
-    public record StoreScoreModifier(boolean requestResult, String holder, String objective) implements ExecuteModifier {
-    }
-
-    public record StoreStorageModifier(
-            boolean requestResult,
-            Identifier storageId,
-            NbtPathArgumentType.NbtPath path,
-            String numericType,
-            double scale
-    ) implements ExecuteModifier {
-    }
-
-    public record ScoreSetPlan(String sourceText, String holder, String objective, int value) implements SpecializedPlan {
-    }
-
-    public record ScoreAddPlan(String sourceText, String holder, String objective, int delta) implements SpecializedPlan {
-    }
-
-    public record ScoreGetPlan(String sourceText, String holder, String objective) implements SpecializedPlan {
-    }
-
-    public record ScoreResetPlan(String sourceText, String holder, String objective) implements SpecializedPlan {
-    }
-
-    public record ScoreOperationPlan(
-            String sourceText,
-            String targetHolder,
-            String targetObjective,
-            String operation,
-            String sourceHolder,
-            String sourceObjective
-    ) implements SpecializedPlan {
-    }
-
-    public record DataModifyStorageSetValuePlan(
-            String sourceText,
-            Identifier targetStorageId,
-            NbtPathArgumentType.NbtPath targetPath,
-            NbtElement value
-    ) implements SpecializedPlan {
-    }
-
-    public record DataModifyStorageSetFromPlan(
-            String sourceText,
-            Identifier targetStorageId,
-            NbtPathArgumentType.NbtPath targetPath,
-            Identifier sourceStorageId,
-            NbtPathArgumentType.NbtPath sourcePath
-    ) implements SpecializedPlan {
-    }
-
-    public record DataModifyStorageMergeValuePlan(
-            String sourceText,
-            Identifier targetStorageId,
-            NbtPathArgumentType.NbtPath targetPath,
-            NbtElement value
-    ) implements SpecializedPlan {
-    }
-
-    public record DataModifyStorageMergeFromPlan(
-            String sourceText,
-            Identifier targetStorageId,
-            NbtPathArgumentType.NbtPath targetPath,
-            Identifier sourceStorageId,
-            NbtPathArgumentType.NbtPath sourcePath
-    ) implements SpecializedPlan {
     }
 }

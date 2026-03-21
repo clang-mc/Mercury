@@ -361,20 +361,6 @@ public final class BaselineBytecodeOps {
         );
     }
 
-    public static void buildInvokeSpecialized(MethodVisitor visitor, int specializedId) {
-        pushInt(visitor, specializedId);
-        visitor.visitVarInsn(Opcodes.ALOAD, 0);
-        visitor.visitVarInsn(Opcodes.ALOAD, 1);
-        visitor.visitTypeInsn(Opcodes.CHECKCAST, Type.getInternalName(net.minecraft.server.command.ServerCommandSource.class));
-        visitor.visitMethodInsn(
-                Opcodes.INVOKESTATIC,
-                RUNTIME_INTERNAL,
-                "invokeSpecialized",
-                "(IL" + FRAME_INTERNAL + ";Lnet/minecraft/server/command/ServerCommandSource;)V",
-                false
-        );
-    }
-
     private static void buildSafeDivide(MethodVisitor visitor, int opcode) {
         Label divisorNonZero = new Label();
         Label done = new Label();
