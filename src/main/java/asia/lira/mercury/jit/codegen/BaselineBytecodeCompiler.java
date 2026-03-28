@@ -1,5 +1,7 @@
 package asia.lira.mercury.jit.codegen;
 
+import asia.lira.mercury.impl.cache.InstalledMacroSpecialization;
+import asia.lira.mercury.impl.cache.MacroOptimizationCoordinator;
 import asia.lira.mercury.jit.runtime.BaselineExecutionEngine;
 import asia.lira.mercury.jit.runtime.ExecutionFrame;
 import asia.lira.mercury.jit.pipeline.LoweredUnit;
@@ -53,6 +55,7 @@ public final class BaselineBytecodeCompiler {
             Set<net.minecraft.util.Identifier> classesWithSharedRequiredSlots
     ) {
         Map<Integer, SpecializedFieldSpec> specializedFields = collectSpecializedFields(unit);
+        Map<String, Tier2DispatchFieldSpec> tier2DispatchFields = collectTier2DispatchFields(unit);
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
         writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER, internalName, null, "java/lang/Object", null);
 
@@ -63,12 +66,15 @@ public final class BaselineBytecodeCompiler {
         for (SpecializedFieldSpec fieldSpec : specializedFields.values()) {
             writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL, fieldSpec.fieldName(), fieldSpec.planDescriptor(), null, null).visitEnd();
         }
+        for (Tier2DispatchFieldSpec fieldSpec : tier2DispatchFields.values()) {
+            writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL, fieldSpec.fieldName(), fieldSpec.descriptor(), null, null).visitEnd();
+        }
 
         emitConstructor(writer);
-        if (emitRequiredSlotsField || !specializedFields.isEmpty()) {
-            emitClassInitializer(writer, internalName, unit.requiredSlots(), emitRequiredSlotsField, specializedFields);
+        if (emitRequiredSlotsField || !specializedFields.isEmpty() || !tier2DispatchFields.isEmpty()) {
+            emitClassInitializer(writer, internalName, unit.requiredSlots(), emitRequiredSlotsField, specializedFields, tier2DispatchFields);
         }
-        emitInvoke(writer, unit, internalNames, callSiteCounts, requiredSlotsById, specializedFields);
+        emitInvoke(writer, unit, internalNames, callSiteCounts, requiredSlotsById, specializedFields, tier2DispatchFields);
 
         writer.visitEnd();
         return writer.toByteArray();
@@ -89,7 +95,8 @@ public final class BaselineBytecodeCompiler {
             String internalName,
             int[] requiredSlots,
             boolean emitRequiredSlotsField,
-            Map<Integer, SpecializedFieldSpec> specializedFields
+            Map<Integer, SpecializedFieldSpec> specializedFields,
+            Map<String, Tier2DispatchFieldSpec> tier2DispatchFields
     ) {
         MethodVisitor visitor = writer.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null);
         visitor.visitCode();
@@ -109,6 +116,18 @@ public final class BaselineBytecodeCompiler {
             visitor.visitTypeInsn(Opcodes.CHECKCAST, fieldSpec.planInternalName());
             visitor.visitFieldInsn(Opcodes.PUTSTATIC, internalName, fieldSpec.fieldName(), fieldSpec.planDescriptor());
         }
+        for (Tier2DispatchFieldSpec fieldSpec : tier2DispatchFields.values()) {
+            BaselineBytecodeOps.pushInt(visitor, fieldSpec.planId());
+            visitor.visitLdcInsn(fieldSpec.guardSignature());
+            visitor.visitMethodInsn(
+                    Opcodes.INVOKESTATIC,
+                    Type.getInternalName(MacroOptimizationCoordinator.class),
+                    "requireInstalled",
+                    "(ILjava/lang/String;)" + Type.getDescriptor(InstalledMacroSpecialization.class),
+                    false
+            );
+            visitor.visitFieldInsn(Opcodes.PUTSTATIC, internalName, fieldSpec.fieldName(), fieldSpec.descriptor());
+        }
         visitor.visitInsn(Opcodes.RETURN);
         visitor.visitMaxs(0, 0);
         visitor.visitEnd();
@@ -120,7 +139,8 @@ public final class BaselineBytecodeCompiler {
             Map<net.minecraft.util.Identifier, String> internalNames,
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
             Map<net.minecraft.util.Identifier, int[]> requiredSlotsById,
-            Map<Integer, SpecializedFieldSpec> specializedFields
+            Map<Integer, SpecializedFieldSpec> specializedFields,
+            Map<String, Tier2DispatchFieldSpec> tier2DispatchFields
     ) {
         String descriptor = "("
                 + EXECUTION_FRAME_DESC
@@ -150,7 +170,7 @@ public final class BaselineBytecodeCompiler {
 
         for (int i = 0; i < unit.blocks().size(); i++) {
             visitor.visitLabel(stateLabels[i]);
-            emitBlock(visitor, unit, unit.blocks().get(i), loopStart, internalNames, callSiteCounts, requiredSlotsById, specializedFields, internalNameFor(unit.entryId()));
+            emitBlock(visitor, unit, unit.blocks().get(i), loopStart, internalNames, callSiteCounts, requiredSlotsById, specializedFields, tier2DispatchFields, internalNameFor(unit.entryId()));
         }
 
         visitor.visitLabel(defaultLabel);
@@ -169,6 +189,7 @@ public final class BaselineBytecodeCompiler {
             Map<net.minecraft.util.Identifier, Integer> callSiteCounts,
             Map<net.minecraft.util.Identifier, int[]> requiredSlotsById,
             Map<Integer, SpecializedFieldSpec> specializedFields,
+            Map<String, Tier2DispatchFieldSpec> tier2DispatchFields,
             String ownerInternalName
     ) {
         for (LoweredUnit.LoweredInstruction instruction : block.instructions()) {
@@ -191,6 +212,12 @@ public final class BaselineBytecodeCompiler {
                         emitActionBridge(visitor, unit, actionBridge.bindingId(), actionBridge.spillBeforeSlots(), actionBridge.reloadAfterSlots());
                 case LoweredUnit.SpecializedInstruction specializedInstruction ->
                         emitSpecialized(visitor, unit, specializedInstruction.specializedId(), specializedInstruction.spillBeforeSlots(), specializedInstruction.reloadAfterSlots(), specializedFields, ownerInternalName);
+                case LoweredUnit.PrefetchMacroLineInstruction prefetchMacroLineInstruction ->
+                        BaselineBytecodeOps.buildPrefetchMacroLine(visitor, prefetchMacroLineInstruction.planId());
+                case LoweredUnit.PrefetchedMacroCallInstruction prefetchedMacroCallInstruction ->
+                        emitPrefetchedMacroCall(visitor, unit, prefetchedMacroCallInstruction.planId(), prefetchedMacroCallInstruction.spillBeforeSlots(), prefetchedMacroCallInstruction.reloadAfterSlots());
+                case LoweredUnit.Tier2MacroDispatchInstruction tier2MacroDispatchInstruction ->
+                        emitTier2MacroDispatch(visitor, unit, tier2MacroDispatchInstruction.planId(), tier2MacroDispatchInstruction.spillBeforeSlots(), tier2MacroDispatchInstruction.reloadAfterSlots(), tier2MacroDispatchInstruction.targets(), tier2DispatchFields, ownerInternalName);
             }
         }
 
@@ -216,6 +243,12 @@ public final class BaselineBytecodeCompiler {
                 spillPromotedSlots(visitor, unit, suspendAction.spillBeforeSlots());
                 BaselineBytecodeOps.buildSuspend(visitor, suspendAction.bindingId(), suspendAction.continuationBlockIndex());
             }
+            case LoweredUnit.SuspendPrefetchedMacroTerminator suspendPrefetchedMacro -> {
+                spillPromotedSlots(visitor, unit, suspendPrefetchedMacro.spillBeforeSlots());
+                BaselineBytecodeOps.buildSuspendPrefetchedMacro(visitor, suspendPrefetchedMacro.planId(), suspendPrefetchedMacro.continuationBlockIndex());
+            }
+            case LoweredUnit.Tier2MacroDispatchTerminator tier2MacroDispatchTerminator ->
+                    emitTier2MacroDispatchTerminator(visitor, unit, loopStart, tier2MacroDispatchTerminator, tier2DispatchFields, ownerInternalName);
         }
     }
 
@@ -320,6 +353,91 @@ public final class BaselineBytecodeCompiler {
         reloadPromotedSlots(visitor, unit, reloadAfterSlots);
     }
 
+    private static void emitPrefetchedMacroCall(
+            MethodVisitor visitor,
+            LoweredUnit unit,
+            int planId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots
+    ) {
+        spillPromotedSlots(visitor, unit, spillBeforeSlots);
+        BaselineBytecodeOps.buildInvokePrefetchedMacro(visitor, planId);
+        reloadPromotedSlots(visitor, unit, reloadAfterSlots);
+    }
+
+    private static void emitTier2MacroDispatch(
+            MethodVisitor visitor,
+            LoweredUnit unit,
+            int planId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots,
+            java.util.List<LoweredUnit.Tier2DispatchTarget> targets,
+            Map<String, Tier2DispatchFieldSpec> tier2DispatchFields,
+            String ownerInternalName
+    ) {
+        spillPromotedSlots(visitor, unit, spillBeforeSlots);
+        BaselineBytecodeOps.buildPrefetchMacroLine(visitor, planId);
+        BaselineBytecodeOps.buildLoadTier2MacroArguments(visitor, planId, 7);
+        Label fallback = new Label();
+        Label done = new Label();
+        for (LoweredUnit.Tier2DispatchTarget target : targets) {
+            Label next = new Label();
+            Tier2DispatchFieldSpec fieldSpec = tier2DispatchFields.get(dispatchKey(planId, target.guardSignature()));
+            visitor.visitFieldInsn(Opcodes.GETSTATIC, ownerInternalName, fieldSpec.fieldName(), fieldSpec.descriptor());
+            visitor.visitVarInsn(Opcodes.ALOAD, 7);
+            visitor.visitMethodInsn(
+                    Opcodes.INVOKEVIRTUAL,
+                    Type.getInternalName(InstalledMacroSpecialization.class),
+                    "matches",
+                    "(" + Type.getDescriptor(net.minecraft.nbt.NbtCompound.class) + ")Z",
+                    false
+            );
+            visitor.visitJumpInsn(Opcodes.IFEQ, next);
+            BaselineBytecodeOps.buildInlineRequiredSlots(visitor, target.requiredSlots());
+            BaselineBytecodeOps.buildStaticInvoke(visitor, target.targetInternalName(), false);
+            visitor.visitJumpInsn(Opcodes.GOTO, done);
+            visitor.visitLabel(next);
+        }
+        visitor.visitLabel(fallback);
+        BaselineBytecodeOps.buildInvokeExpandedMacroNoProfile(visitor, planId);
+        visitor.visitLabel(done);
+        reloadPromotedSlots(visitor, unit, reloadAfterSlots);
+    }
+
+    private static void emitTier2MacroDispatchTerminator(
+            MethodVisitor visitor,
+            LoweredUnit unit,
+            Label loopStart,
+            LoweredUnit.Tier2MacroDispatchTerminator terminator,
+            Map<String, Tier2DispatchFieldSpec> tier2DispatchFields,
+            String ownerInternalName
+    ) {
+        spillPromotedSlots(visitor, unit, terminator.spillBeforeSlots());
+        BaselineBytecodeOps.buildPrefetchMacroLine(visitor, terminator.planId());
+        BaselineBytecodeOps.buildLoadTier2MacroArguments(visitor, terminator.planId(), 7);
+        for (LoweredUnit.Tier2DispatchTarget target : terminator.targets()) {
+            Label next = new Label();
+            Tier2DispatchFieldSpec fieldSpec = tier2DispatchFields.get(dispatchKey(terminator.planId(), target.guardSignature()));
+            visitor.visitFieldInsn(Opcodes.GETSTATIC, ownerInternalName, fieldSpec.fieldName(), fieldSpec.descriptor());
+            visitor.visitVarInsn(Opcodes.ALOAD, 7);
+            visitor.visitMethodInsn(
+                    Opcodes.INVOKEVIRTUAL,
+                    Type.getInternalName(InstalledMacroSpecialization.class),
+                    "matches",
+                    "(" + Type.getDescriptor(net.minecraft.nbt.NbtCompound.class) + ")Z",
+                    false
+            );
+            visitor.visitJumpInsn(Opcodes.IFEQ, next);
+            BaselineBytecodeOps.buildInlineRequiredSlots(visitor, target.requiredSlots());
+            BaselineBytecodeOps.buildStaticInvoke(visitor, target.targetInternalName(), false);
+            BaselineBytecodeOps.pushInt(visitor, terminator.continuationBlockIndex());
+            visitor.visitVarInsn(Opcodes.ISTORE, 4);
+            visitor.visitJumpInsn(Opcodes.GOTO, loopStart);
+            visitor.visitLabel(next);
+        }
+        BaselineBytecodeOps.buildSuspendPrefetchedMacro(visitor, terminator.planId(), terminator.continuationBlockIndex());
+    }
+
     private static void emitSpecialized(
             MethodVisitor visitor,
             LoweredUnit unit,
@@ -349,6 +467,41 @@ public final class BaselineBytecodeCompiler {
             }
         }
         return fieldSpecs;
+    }
+
+    private static Map<String, Tier2DispatchFieldSpec> collectTier2DispatchFields(LoweredUnit unit) {
+        Map<String, Tier2DispatchFieldSpec> fieldSpecs = new LinkedHashMap<>();
+        for (LoweredUnit.LoweredBlock block : unit.blocks()) {
+            for (LoweredUnit.LoweredInstruction instruction : block.instructions()) {
+                if (instruction instanceof LoweredUnit.Tier2MacroDispatchInstruction tier2MacroDispatchInstruction) {
+                    for (LoweredUnit.Tier2DispatchTarget target : tier2MacroDispatchInstruction.targets()) {
+                        fieldSpecs.computeIfAbsent(dispatchKey(tier2MacroDispatchInstruction.planId(), target.guardSignature()), ignored ->
+                                new Tier2DispatchFieldSpec(
+                                        "TIER2_MACRO_" + tier2MacroDispatchInstruction.planId() + "_" + Integer.toHexString(target.guardSignature().hashCode()),
+                                        tier2MacroDispatchInstruction.planId(),
+                                        target.guardSignature(),
+                                        Type.getDescriptor(InstalledMacroSpecialization.class)
+                                ));
+                    }
+                }
+            }
+            if (block.terminator() instanceof LoweredUnit.Tier2MacroDispatchTerminator tier2MacroDispatchTerminator) {
+                for (LoweredUnit.Tier2DispatchTarget target : tier2MacroDispatchTerminator.targets()) {
+                    fieldSpecs.computeIfAbsent(dispatchKey(tier2MacroDispatchTerminator.planId(), target.guardSignature()), ignored ->
+                            new Tier2DispatchFieldSpec(
+                                    "TIER2_MACRO_" + tier2MacroDispatchTerminator.planId() + "_" + Integer.toHexString(target.guardSignature().hashCode()),
+                                    tier2MacroDispatchTerminator.planId(),
+                                    target.guardSignature(),
+                                    Type.getDescriptor(InstalledMacroSpecialization.class)
+                            ));
+                }
+            }
+        }
+        return fieldSpecs;
+    }
+
+    private static String dispatchKey(int planId, String guardSignature) {
+        return planId + "::" + guardSignature;
     }
 
     private static SpecializedFieldSpec specializedFieldSpec(int specializedId) {
@@ -433,6 +586,14 @@ public final class BaselineBytecodeCompiler {
             String planDescriptor,
             String planInternalName,
             SpecializedPlan plan
+    ) {
+    }
+
+    private record Tier2DispatchFieldSpec(
+            String fieldName,
+            int planId,
+            String guardSignature,
+            String descriptor
     ) {
     }
 }

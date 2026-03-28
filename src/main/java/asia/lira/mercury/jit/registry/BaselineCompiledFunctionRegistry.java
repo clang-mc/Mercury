@@ -1,6 +1,9 @@
 package asia.lira.mercury.jit.registry;
 
+import asia.lira.mercury.impl.cache.MacroPrefetchRegistry;
+import asia.lira.mercury.impl.cache.MacroOptimizationCoordinator;
 import asia.lira.mercury.ir.FunctionIrRegistry;
+import asia.lira.mercury.ir.FunctionIrCompiler;
 import asia.lira.mercury.jit.codegen.BaselineBytecodeCompiler;
 import asia.lira.mercury.jit.pass.BaselinePass;
 import asia.lira.mercury.jit.runtime.BaselineExecutionEngine;
@@ -15,10 +18,13 @@ import asia.lira.mercury.jit.pipeline.LoweredUnitInliner;
 import asia.lira.mercury.jit.pipeline.SlotEffectSummary;
 import asia.lira.mercury.jit.pass.BaselinePassContext;
 import asia.lira.mercury.jit.pass.BaselinePassPipeline;
+import asia.lira.mercury.jit.pass.MacroPrefetchPass;
 import asia.lira.mercury.jit.pass.SlotPromotionPass;
 import asia.lira.mercury.jit.pass.UnresolvedCallIsolationPass;
 import asia.lira.mercury.jit.specialized.core.SpecializedCommandRegistry;
 import net.minecraft.command.CommandExecutionContext;
+import net.minecraft.command.SourcedCommandAction;
+import net.minecraft.server.function.CommandFunction;
 import net.minecraft.util.Identifier;
 import org.jetbrains.annotations.Nullable;
 
@@ -35,7 +41,9 @@ import java.util.Set;
 public final class BaselineCompiledFunctionRegistry {
     private static final BaselineCompiledFunctionRegistry INSTANCE = new BaselineCompiledFunctionRegistry();
 
-    private final Map<Identifier, CompiledArtifact> artifacts = new LinkedHashMap<>();
+    private final Map<Identifier, CompiledArtifact> tier1Artifacts = new LinkedHashMap<>();
+    private final Map<Identifier, CompiledArtifact> tier2Artifacts = new LinkedHashMap<>();
+    private final Map<Identifier, CompiledArtifact> syntheticArtifacts = new LinkedHashMap<>();
 
     private BaselineCompiledFunctionRegistry() {
     }
@@ -45,12 +53,20 @@ public final class BaselineCompiledFunctionRegistry {
     }
 
     public void clear() {
-        artifacts.clear();
+        tier1Artifacts.clear();
+        tier2Artifacts.clear();
+        syntheticArtifacts.clear();
         UnknownCommandBindingRegistry.getInstance().clear();
         SpecializedCommandRegistry.getInstance().clear();
+        MacroPrefetchRegistry.getInstance().clear();
+        MacroOptimizationCoordinator.getInstance().clear();
+        Tier2CompilationCoordinator.getInstance().clear();
     }
 
-    public void rebuild(Collection<FunctionIrRegistry.ParsedFunctionIr> functions) {
+    public void rebuild(
+            Collection<FunctionIrRegistry.ParsedFunctionIr> functions,
+            Map<Identifier, ? extends CommandFunction<?>> loadedFunctions
+    ) {
         if (!MercuryJitRuntime.isEnabled()) {
             clear();
             return;
@@ -58,6 +74,7 @@ public final class BaselineCompiledFunctionRegistry {
 
         UnknownCommandBindingRegistry.getInstance().rebuild(functions);
         SpecializedCommandRegistry.getInstance().rebuild(functions);
+        MacroPrefetchRegistry.getInstance().rebuild(functions, loadedFunctions);
 
         Map<Identifier, BaselineProgram.Builder> candidates = new LinkedHashMap<>();
         for (FunctionIrRegistry.ParsedFunctionIr functionIr : functions) {
@@ -74,7 +91,9 @@ public final class BaselineCompiledFunctionRegistry {
             }
         }
 
-        artifacts.clear();
+        tier1Artifacts.clear();
+        tier2Artifacts.clear();
+        syntheticArtifacts.clear();
         JumpGraph jumpGraph = JumpGraph.build(compiledPrograms);
         Map<Identifier, LoweredUnit> loweredUnits = new LinkedHashMap<>();
         for (Identifier id : compiledPrograms.keySet()) {
@@ -98,6 +117,7 @@ public final class BaselineCompiledFunctionRegistry {
         Set<Identifier> classesWithSharedRequiredSlots = collectClassesWithSharedRequiredSlots(finalLoweredUnits.keySet(), requiredSlotsById, callSiteCounts);
         Map<Identifier, SlotEffectSummary> effectSummaries = collectEffectSummaries(finalLoweredUnits);
         BaselinePassPipeline passPipeline = new BaselinePassPipeline(List.of(
+                new MacroPrefetchPass(),
                 new UnresolvedCallIsolationPass(),
                 new SlotPromotionPass()
         ));
@@ -147,13 +167,14 @@ public final class BaselineCompiledFunctionRegistry {
                         )
                 );
                 BaselineBytecodeCompiler.CompiledClassData classData = entry.getValue();
-                artifacts.put(id, new CompiledArtifact(
+                tier1Artifacts.put(id, new CompiledArtifact(
                         compiledPrograms.get(id),
                         optimizedUnits.get(id),
                         invokeHandle,
                         classData.classBytes(),
                         classData.internalName(),
-                        classData.requiredSlots()
+                        classData.requiredSlots(),
+                        ArtifactKind.TIER1
                 ));
             } catch (ReflectiveOperationException exception) {
                 throw new RuntimeException("Failed to bind compiled class for " + id, exception);
@@ -162,20 +183,188 @@ public final class BaselineCompiledFunctionRegistry {
     }
 
     public int count() {
-        return artifacts.size();
+        return allArtifacts().size();
     }
 
     public List<Identifier> ids() {
-        return List.copyOf(artifacts.keySet());
+        return List.copyOf(allArtifacts().keySet());
     }
 
     public @Nullable BaselineProgram get(Identifier id) {
-        CompiledArtifact artifact = artifacts.get(id);
+        CompiledArtifact artifact = getArtifact(id);
         return artifact == null ? null : artifact.program();
     }
 
     public @Nullable CompiledArtifact getArtifact(Identifier id) {
-        return artifacts.get(id);
+        if (tier2Artifacts.containsKey(id)) {
+            return tier2Artifacts.get(id);
+        }
+        if (tier1Artifacts.containsKey(id)) {
+            return tier1Artifacts.get(id);
+        }
+        return syntheticArtifacts.get(id);
+    }
+
+    public @Nullable CompiledArtifact getTier1Artifact(Identifier id) {
+        return tier1Artifacts.get(id);
+    }
+
+    public boolean hasTier2Artifact(Identifier id) {
+        return tier2Artifacts.containsKey(id);
+    }
+
+    public void retireSynthetic(Identifier syntheticId) {
+        syntheticArtifacts.remove(syntheticId);
+    }
+
+    public void installTier2Artifact(Identifier id, CompiledArtifact artifact) {
+        tier2Artifacts.put(id, artifact);
+    }
+
+    public @Nullable CompiledArtifact compileSynthetic(
+            Identifier syntheticId,
+            List<String> sourceLines,
+            List<? extends SourcedCommandAction<?>> actions
+    ) {
+        @SuppressWarnings("unchecked")
+        FunctionIrRegistry.ParsedFunctionIr parsed = FunctionIrCompiler.compile(
+                syntheticId,
+                (List<SourcedCommandAction<net.minecraft.server.command.ServerCommandSource>>) (List<?>) actions,
+                null,
+                List.of()
+        );
+        UnknownCommandBindingRegistry.getInstance().registerSynthetic(parsed, actions);
+        SpecializedCommandRegistry.getInstance().registerSynthetic(parsed);
+
+        BaselineProgram.Builder builder = BaselineCompiler.analyze(parsed);
+        if (builder == null) {
+            return null;
+        }
+
+        BaselineProgram program = builder.build();
+        JumpGraph jumpGraph = JumpGraph.build(Map.of(syntheticId, program));
+        LoweredUnit loweredUnit = BaselineLowerer.lower(
+                syntheticId,
+                jumpGraph.unitFor(syntheticId),
+                collectRequiredSlots(jumpGraph.unitFor(syntheticId))
+        );
+
+        Map<Identifier, String> internalNames = new LinkedHashMap<>();
+        Map<Identifier, int[]> requiredSlotsById = new LinkedHashMap<>();
+        Map<Identifier, Integer> callSiteCounts = new LinkedHashMap<>();
+
+        for (Map.Entry<Identifier, CompiledArtifact> entry : allArtifacts().entrySet()) {
+            internalNames.put(entry.getKey(), entry.getValue().internalClassName());
+            requiredSlotsById.put(entry.getKey(), entry.getValue().requiredSlots());
+        }
+        internalNames.put(syntheticId, BaselineBytecodeCompiler.internalNameFor(syntheticId));
+        requiredSlotsById.put(syntheticId, collectRequiredSlots(loweredUnit));
+        callSiteCounts.putAll(collectCallSiteCounts(List.of(loweredUnit)));
+
+        Set<Identifier> classesWithSharedRequiredSlots = collectClassesWithSharedRequiredSlots(
+                java.util.Set.of(syntheticId),
+                requiredSlotsById,
+                callSiteCounts
+        );
+        BaselineBytecodeCompiler.CompiledClassData classData = BaselineBytecodeCompiler.compile(
+                loweredUnit,
+                internalNames,
+                callSiteCounts,
+                requiredSlotsById,
+                classesWithSharedRequiredSlots
+        );
+
+        GeneratedClassLoader classLoader = new GeneratedClassLoader(BaselineCompiledFunctionRegistry.class.getClassLoader());
+        Class<?> definedClass = classLoader.define(classData.internalName().replace('/', '.'), classData.classBytes());
+        try {
+            MethodHandle invokeHandle = MethodHandles.privateLookupIn(definedClass, MethodHandles.lookup()).findStatic(
+                    definedClass,
+                    "invoke",
+                    MethodType.methodType(
+                            BaselineExecutionEngine.ExecutionOutcome.class,
+                            ExecutionFrame.class,
+                            Object.class,
+                            CommandExecutionContext.class,
+                            net.minecraft.command.Frame.class,
+                            int.class
+                    )
+            );
+            CompiledArtifact artifact = new CompiledArtifact(
+                    program,
+                    loweredUnit,
+                    invokeHandle,
+                    classData.classBytes(),
+                    classData.internalName(),
+                    classData.requiredSlots(),
+                    ArtifactKind.SYNTHETIC
+            );
+            syntheticArtifacts.put(syntheticId, artifact);
+            return artifact;
+        } catch (ReflectiveOperationException exception) {
+            return null;
+        }
+    }
+
+    public @Nullable CompiledArtifact compileTier2(Identifier functionId, LoweredUnit loweredUnit) {
+        Map<Identifier, String> internalNames = new LinkedHashMap<>();
+        Map<Identifier, int[]> requiredSlotsById = new LinkedHashMap<>();
+        Map<Identifier, Integer> callSiteCounts = collectCallSiteCounts(List.of(loweredUnit));
+
+        for (Map.Entry<Identifier, CompiledArtifact> entry : allArtifacts().entrySet()) {
+            internalNames.put(entry.getKey(), entry.getValue().internalClassName());
+            requiredSlotsById.put(entry.getKey(), entry.getValue().requiredSlots());
+        }
+        internalNames.put(functionId, BaselineBytecodeCompiler.internalNameFor(functionId).replace("Generated_", "Generated_T2_"));
+        requiredSlotsById.put(functionId, collectRequiredSlots(loweredUnit));
+
+        Set<Identifier> classesWithSharedRequiredSlots = collectClassesWithSharedRequiredSlots(
+                java.util.Set.of(functionId),
+                requiredSlotsById,
+                callSiteCounts
+        );
+        BaselineBytecodeCompiler.CompiledClassData classData = BaselineBytecodeCompiler.compile(
+                loweredUnit,
+                internalNames,
+                callSiteCounts,
+                requiredSlotsById,
+                classesWithSharedRequiredSlots
+        );
+
+        GeneratedClassLoader classLoader = new GeneratedClassLoader(BaselineCompiledFunctionRegistry.class.getClassLoader());
+        for (Map.Entry<Identifier, CompiledArtifact> entry : allArtifacts().entrySet()) {
+            if (entry.getKey().equals(functionId)) {
+                continue;
+            }
+            CompiledArtifact artifact = entry.getValue();
+            classLoader.define(artifact.internalClassName().replace('/', '.'), artifact.classBytes());
+        }
+        Class<?> definedClass = classLoader.define(classData.internalName().replace('/', '.'), classData.classBytes());
+        try {
+            MethodHandle invokeHandle = MethodHandles.privateLookupIn(definedClass, MethodHandles.lookup()).findStatic(
+                    definedClass,
+                    "invoke",
+                    MethodType.methodType(
+                            BaselineExecutionEngine.ExecutionOutcome.class,
+                            ExecutionFrame.class,
+                            Object.class,
+                            CommandExecutionContext.class,
+                            net.minecraft.command.Frame.class,
+                            int.class
+                    )
+            );
+            BaselineProgram program = getArtifact(functionId) == null ? get(functionId) : getArtifact(functionId).program();
+            return new CompiledArtifact(
+                    program,
+                    loweredUnit,
+                    invokeHandle,
+                    classData.classBytes(),
+                    classData.internalName(),
+                    classData.requiredSlots(),
+                    ArtifactKind.TIER2
+            );
+        } catch (ReflectiveOperationException exception) {
+            return null;
+        }
     }
 
     private boolean isCompilable(
@@ -380,17 +569,32 @@ public final class BaselineCompiledFunctionRegistry {
         );
     }
 
+    private Map<Identifier, CompiledArtifact> allArtifacts() {
+        Map<Identifier, CompiledArtifact> merged = new LinkedHashMap<>();
+        merged.putAll(syntheticArtifacts);
+        merged.putAll(tier1Artifacts);
+        merged.putAll(tier2Artifacts);
+        return merged;
+    }
+
     public record CompiledArtifact(
             BaselineProgram program,
             LoweredUnit optimizedUnit,
             MethodHandle invokeHandle,
             byte[] classBytes,
             String internalClassName,
-            int[] requiredSlots
+            int[] requiredSlots,
+            ArtifactKind kind
     ) {
         public BaselineExecutionEngine.ExecutionOutcome invoke(ExecutionFrame frame, Object source, CommandExecutionContext<?> context, net.minecraft.command.Frame commandFrame, int initialState) throws Throwable {
             return (BaselineExecutionEngine.ExecutionOutcome) invokeHandle.invoke(frame, source, context, commandFrame, initialState);
         }
+    }
+
+    public enum ArtifactKind {
+        TIER1,
+        TIER2,
+        SYNTHETIC
     }
 
     public record JumpGraph(Map<Identifier, CompilationUnit> units) {

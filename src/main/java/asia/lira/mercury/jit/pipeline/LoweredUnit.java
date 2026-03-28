@@ -40,7 +40,7 @@ public record LoweredUnit(
         }
     }
 
-    public sealed interface LoweredInstruction permits SetConstInstruction, AddConstInstruction, GetInstruction, ResetInstruction, OperationInstruction, CallInstruction, ReflectiveBridgeInstruction, ActionBridgeInstruction, SpecializedInstruction {
+    public sealed interface LoweredInstruction permits SetConstInstruction, AddConstInstruction, GetInstruction, ResetInstruction, OperationInstruction, CallInstruction, ReflectiveBridgeInstruction, ActionBridgeInstruction, SpecializedInstruction, PrefetchMacroLineInstruction, PrefetchedMacroCallInstruction, Tier2MacroDispatchInstruction {
         String sourceText();
     }
 
@@ -108,7 +108,51 @@ public record LoweredUnit(
         }
     }
 
-    public sealed interface LoweredTerminator permits CompleteTerminator, ReturnValueTerminator, JumpLocalTerminator, JumpExternalTerminator, SuspendActionTerminator {
+    public record PrefetchMacroLineInstruction(
+            int planId,
+            String sourceText
+    ) implements LoweredInstruction {
+    }
+
+    public record PrefetchedMacroCallInstruction(
+            int planId,
+            int bindingId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots,
+            String sourceText
+    ) implements LoweredInstruction {
+        public PrefetchedMacroCallInstruction {
+            spillBeforeSlots = spillBeforeSlots.clone();
+            reloadAfterSlots = reloadAfterSlots.clone();
+        }
+    }
+
+    public record Tier2DispatchTarget(
+            String guardSignature,
+            Identifier targetFunction,
+            String targetInternalName,
+            int[] requiredSlots
+    ) {
+        public Tier2DispatchTarget {
+            requiredSlots = requiredSlots.clone();
+        }
+    }
+
+    public record Tier2MacroDispatchInstruction(
+            int planId,
+            int[] spillBeforeSlots,
+            int[] reloadAfterSlots,
+            List<Tier2DispatchTarget> targets,
+            String sourceText
+    ) implements LoweredInstruction {
+        public Tier2MacroDispatchInstruction {
+            spillBeforeSlots = spillBeforeSlots.clone();
+            reloadAfterSlots = reloadAfterSlots.clone();
+            targets = List.copyOf(targets);
+        }
+    }
+
+    public sealed interface LoweredTerminator permits CompleteTerminator, ReturnValueTerminator, JumpLocalTerminator, JumpExternalTerminator, SuspendActionTerminator, SuspendPrefetchedMacroTerminator, Tier2MacroDispatchTerminator {
     }
 
     public record CompleteTerminator() implements LoweredTerminator {
@@ -137,6 +181,29 @@ public record LoweredUnit(
     ) implements LoweredTerminator {
         public SuspendActionTerminator {
             spillBeforeSlots = spillBeforeSlots.clone();
+        }
+    }
+
+    public record SuspendPrefetchedMacroTerminator(
+            int planId,
+            int bindingId,
+            int continuationBlockIndex,
+            int[] spillBeforeSlots
+    ) implements LoweredTerminator {
+        public SuspendPrefetchedMacroTerminator {
+            spillBeforeSlots = spillBeforeSlots.clone();
+        }
+    }
+
+    public record Tier2MacroDispatchTerminator(
+            int planId,
+            int continuationBlockIndex,
+            int[] spillBeforeSlots,
+            List<Tier2DispatchTarget> targets
+    ) implements LoweredTerminator {
+        public Tier2MacroDispatchTerminator {
+            spillBeforeSlots = spillBeforeSlots.clone();
+            targets = List.copyOf(targets);
         }
     }
 }

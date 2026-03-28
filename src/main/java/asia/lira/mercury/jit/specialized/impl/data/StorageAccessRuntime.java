@@ -1,6 +1,7 @@
 package asia.lira.mercury.jit.specialized.impl.data;
 
 import asia.lira.mercury.Mercury;
+import asia.lira.mercury.impl.cache.MacroPrefetchRuntime;
 import com.google.common.collect.Iterables;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
@@ -37,6 +38,7 @@ public final class StorageAccessRuntime {
             throw MERGE_FAILED_EXCEPTION.create();
         }
         save(storageId, root);
+        MacroPrefetchRuntime.onStoreToMacroStorage(storageId);
         return changed;
     }
 
@@ -56,6 +58,7 @@ public final class StorageAccessRuntime {
             throw MERGE_FAILED_EXCEPTION.create();
         }
         save(targetStorageId, root);
+        MacroPrefetchRuntime.onStoreToMacroStorage(targetStorageId);
         return changed;
     }
 
@@ -86,6 +89,7 @@ public final class StorageAccessRuntime {
         NbtCompound root = getMutable(storageId);
         path.put(root, wrapNumber(value, numericType, scale));
         save(storageId, root);
+        MacroPrefetchRuntime.onStoreToMacroStorage(storageId);
     }
 
     private static int mergeElements(Identifier storageId, NbtPathArgumentType.NbtPath targetPath, Collection<NbtElement> elements) throws CommandSyntaxException {
@@ -113,6 +117,7 @@ public final class StorageAccessRuntime {
             throw MERGE_FAILED_EXCEPTION.create();
         }
         save(storageId, root);
+        MacroPrefetchRuntime.onStoreToMacroStorage(storageId);
         return changed;
     }
 

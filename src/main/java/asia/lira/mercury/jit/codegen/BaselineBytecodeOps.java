@@ -1,5 +1,6 @@
 package asia.lira.mercury.jit.codegen;
 
+import asia.lira.mercury.impl.cache.MacroPrefetchRuntime;
 import asia.lira.mercury.jit.runtime.BaselineExecutionEngine;
 import asia.lira.mercury.jit.runtime.ExecutionFrame;
 import org.objectweb.asm.Label;
@@ -10,6 +11,7 @@ import org.objectweb.asm.Type;
 public final class BaselineBytecodeOps {
     private static final String FRAME_INTERNAL = Type.getInternalName(ExecutionFrame.class);
     private static final String RUNTIME_INTERNAL = Type.getInternalName(BaselineExecutionEngine.class);
+    private static final String PREFETCH_RUNTIME_INTERNAL = Type.getInternalName(MacroPrefetchRuntime.class);
     private static final String OUTCOME_DESC = Type.getDescriptor(BaselineExecutionEngine.ExecutionOutcome.class);
     private static final String OUTCOME_INTERNAL = Type.getInternalName(BaselineExecutionEngine.ExecutionOutcome.class);
     private static final String OUTCOME_MODE_INTERNAL = Type.getInternalName(BaselineExecutionEngine.ExecutionOutcome.Mode.class);
@@ -291,6 +293,62 @@ public final class BaselineBytecodeOps {
         pushInt(visitor, nextState);
         visitor.visitMethodInsn(Opcodes.INVOKESPECIAL, OUTCOME_INTERNAL, "<init>", "(L" + OUTCOME_MODE_INTERNAL + ";III)V", false);
         visitor.visitInsn(Opcodes.ARETURN);
+    }
+
+    public static void buildSuspendPrefetchedMacro(MethodVisitor visitor, int planId, int nextState) {
+        visitor.visitTypeInsn(Opcodes.NEW, OUTCOME_INTERNAL);
+        visitor.visitInsn(Opcodes.DUP);
+        visitor.visitFieldInsn(Opcodes.GETSTATIC, OUTCOME_MODE_INTERNAL, "SUSPEND_PREFETCH", "L" + OUTCOME_MODE_INTERNAL + ";");
+        visitor.visitInsn(Opcodes.ICONST_0);
+        pushInt(visitor, planId);
+        pushInt(visitor, nextState);
+        visitor.visitMethodInsn(Opcodes.INVOKESPECIAL, OUTCOME_INTERNAL, "<init>", "(L" + OUTCOME_MODE_INTERNAL + ";III)V", false);
+        visitor.visitInsn(Opcodes.ARETURN);
+    }
+
+    public static void buildPrefetchMacroLine(MethodVisitor visitor, int planId) {
+        pushInt(visitor, planId);
+        visitor.visitMethodInsn(Opcodes.INVOKESTATIC, PREFETCH_RUNTIME_INTERNAL, "prefetch", "(I)V", false);
+    }
+
+    public static void buildInvokePrefetchedMacro(MethodVisitor visitor, int planId) {
+        pushInt(visitor, planId);
+        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 2);
+        visitor.visitVarInsn(Opcodes.ALOAD, 3);
+        visitor.visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                PREFETCH_RUNTIME_INTERNAL,
+                "invokePrefetchedMacro",
+                "(ILjava/lang/Object;" + CONTEXT_DESC + COMMAND_FRAME_DESC + ")V",
+                false
+        );
+    }
+
+    public static void buildLoadTier2MacroArguments(MethodVisitor visitor, int planId, int localIndex) {
+        pushInt(visitor, planId);
+        visitor.visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                PREFETCH_RUNTIME_INTERNAL,
+                "loadArgumentsForTier2",
+                "(I)" + Type.getDescriptor(net.minecraft.nbt.NbtCompound.class),
+                false
+        );
+        visitor.visitVarInsn(Opcodes.ASTORE, localIndex);
+    }
+
+    public static void buildInvokeExpandedMacroNoProfile(MethodVisitor visitor, int planId) {
+        pushInt(visitor, planId);
+        visitor.visitVarInsn(Opcodes.ALOAD, 1);
+        visitor.visitVarInsn(Opcodes.ALOAD, 2);
+        visitor.visitVarInsn(Opcodes.ALOAD, 3);
+        visitor.visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                PREFETCH_RUNTIME_INTERNAL,
+                "invokeExpandedMacroNoProfile",
+                "(ILjava/lang/Object;" + CONTEXT_DESC + COMMAND_FRAME_DESC + ")V",
+                false
+        );
     }
 
     private static void buildBinaryOperation(MethodVisitor visitor, int primarySlot, int secondarySlot, String operation) {

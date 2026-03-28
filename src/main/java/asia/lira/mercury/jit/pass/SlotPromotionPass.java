@@ -82,6 +82,12 @@ public final class SlotPromotionPass implements BaselinePass {
                     }
                     case LoweredUnit.SpecializedInstruction ignored -> {
                     }
+                    case LoweredUnit.PrefetchMacroLineInstruction ignored -> {
+                    }
+                    case LoweredUnit.PrefetchedMacroCallInstruction ignored -> {
+                    }
+                    case LoweredUnit.Tier2MacroDispatchInstruction ignored -> {
+                    }
                 }
             }
         }
@@ -143,6 +149,26 @@ public final class SlotPromotionPass implements BaselinePass {
                 ));
                 continue;
             }
+            if (instruction instanceof LoweredUnit.PrefetchedMacroCallInstruction prefetchedMacroCallInstruction) {
+                rewrittenInstructions.add(new LoweredUnit.PrefetchedMacroCallInstruction(
+                        prefetchedMacroCallInstruction.planId(),
+                        prefetchedMacroCallInstruction.bindingId(),
+                        toIntArray(promotableSlots),
+                        toIntArray(promotableSlots),
+                        prefetchedMacroCallInstruction.sourceText()
+                ));
+                continue;
+            }
+            if (instruction instanceof LoweredUnit.Tier2MacroDispatchInstruction tier2MacroDispatchInstruction) {
+                rewrittenInstructions.add(new LoweredUnit.Tier2MacroDispatchInstruction(
+                        tier2MacroDispatchInstruction.planId(),
+                        toIntArray(promotableSlots),
+                        toIntArray(promotableSlots),
+                        tier2MacroDispatchInstruction.targets(),
+                        tier2MacroDispatchInstruction.sourceText()
+                ));
+                continue;
+            }
             rewrittenInstructions.add(instruction);
         }
 
@@ -159,6 +185,20 @@ public final class SlotPromotionPass implements BaselinePass {
                     suspendActionTerminator.bindingId(),
                     suspendActionTerminator.continuationBlockIndex(),
                     toIntArray(promotableSlots)
+            );
+        } else if (terminator instanceof LoweredUnit.SuspendPrefetchedMacroTerminator suspendPrefetchedMacroTerminator) {
+            terminator = new LoweredUnit.SuspendPrefetchedMacroTerminator(
+                    suspendPrefetchedMacroTerminator.planId(),
+                    suspendPrefetchedMacroTerminator.bindingId(),
+                    suspendPrefetchedMacroTerminator.continuationBlockIndex(),
+                    toIntArray(promotableSlots)
+            );
+        } else if (terminator instanceof LoweredUnit.Tier2MacroDispatchTerminator tier2MacroDispatchTerminator) {
+            terminator = new LoweredUnit.Tier2MacroDispatchTerminator(
+                    tier2MacroDispatchTerminator.planId(),
+                    tier2MacroDispatchTerminator.continuationBlockIndex(),
+                    toIntArray(promotableSlots),
+                    tier2MacroDispatchTerminator.targets()
             );
         }
 

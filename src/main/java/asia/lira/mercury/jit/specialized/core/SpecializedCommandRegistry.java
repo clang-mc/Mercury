@@ -22,6 +22,7 @@ public final class SpecializedCommandRegistry {
     );
     private final Map<BindingKey, Integer> idsByKey = new LinkedHashMap<>();
     private final Map<Integer, SpecializedPlan> plansById = new LinkedHashMap<>();
+    private int nextId;
 
     private SpecializedCommandRegistry() {
     }
@@ -33,11 +34,11 @@ public final class SpecializedCommandRegistry {
     public void clear() {
         idsByKey.clear();
         plansById.clear();
+        nextId = 0;
     }
 
     public void rebuild(Collection<FunctionIrRegistry.ParsedFunctionIr> functions) {
         clear();
-        int nextId = 0;
         for (FunctionIrRegistry.ParsedFunctionIr functionIr : functions) {
             for (int nodeIndex = 0; nodeIndex < functionIr.nodes().size(); nodeIndex++) {
                 if (!(functionIr.nodes().get(nodeIndex) instanceof FunctionIrRegistry.CommandParseNode commandNode)) {
@@ -53,6 +54,21 @@ public final class SpecializedCommandRegistry {
                 plansById.put(nextId, plan);
                 nextId++;
             }
+        }
+    }
+
+    public void registerSynthetic(FunctionIrRegistry.ParsedFunctionIr functionIr) {
+        for (int nodeIndex = 0; nodeIndex < functionIr.nodes().size(); nodeIndex++) {
+            if (!(functionIr.nodes().get(nodeIndex) instanceof FunctionIrRegistry.CommandParseNode commandNode)) {
+                continue;
+            }
+            SpecializedPlan plan = analyze(commandNode.sourceText());
+            if (plan == null) {
+                continue;
+            }
+            idsByKey.put(new BindingKey(functionIr.id(), nodeIndex), nextId);
+            plansById.put(nextId, plan);
+            nextId++;
         }
     }
 

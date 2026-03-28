@@ -1,6 +1,7 @@
 package asia.lira.mercury.jit.runtime;
 
 import asia.lira.mercury.Mercury;
+import asia.lira.mercury.impl.cache.MacroPrefetchRuntime;
 import asia.lira.mercury.jit.registry.BaselineCompiledFunctionRegistry;
 import asia.lira.mercury.jit.registry.JitPreparationRegistry;
 import asia.lira.mercury.jit.registry.OptimizedSlotRegistry;
@@ -137,6 +138,7 @@ public final class BaselineExecutionEngine {
                 UnknownCommandBindingRegistry.BindingPlan plan = UnknownCommandBindingRegistry.getInstance().plan(bindingId);
                 tracer.traceCommandEnd(commandFrame.depth(), plan == null ? "<bound>" : plan.sourceText(), result);
             }
+            invalidateOpaqueStorage(bindingId);
         } catch (CommandSyntaxException exception) {
             typedSource.handleException(exception, false, context.getTracer());
         } finally {
@@ -157,6 +159,7 @@ public final class BaselineExecutionEngine {
             throw new IllegalStateException("Missing frame for action fallback " + bindingId);
         }
         UnknownCommandBindingRegistry.getInstance().invokeActionFallback(bindingId, typedSource, context, commandFrame);
+        invalidateOpaqueStorage(bindingId);
     }
 
     @SuppressWarnings("unchecked")
@@ -241,6 +244,31 @@ public final class BaselineExecutionEngine {
         STORAGE
     }
 
+    private static void invalidateOpaqueStorage(int bindingId) {
+        UnknownCommandBindingRegistry.BindingPlan plan = UnknownCommandBindingRegistry.getInstance().plan(bindingId);
+        if (plan == null) {
+            return;
+        }
+        MacroPrefetchRuntime.onOpaqueStorageWrite(extractStorageId(plan.sourceText()), "opaque-storage-command");
+    }
+
+    private static Identifier extractStorageId(String sourceText) {
+        if (!sourceText.contains(" storage ")) {
+            return null;
+        }
+        String[] parts = sourceText.trim().split("\\s+");
+        for (int i = 0; i < parts.length - 1; i++) {
+            if ("storage".equals(parts[i])) {
+                try {
+                    return Identifier.of(parts[i + 1]);
+                } catch (Exception ignored) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
     public record ExecutionOutcome(
             Mode mode,
             int returnValue,
@@ -259,6 +287,10 @@ public final class BaselineExecutionEngine {
             return new ExecutionOutcome(Mode.SUSPEND, 0, bindingId, nextState);
         }
 
+        public static ExecutionOutcome suspendPrefetch(int planId, int nextState) {
+            return new ExecutionOutcome(Mode.SUSPEND_PREFETCH, 0, planId, nextState);
+        }
+
         public static ExecutionOutcome fallback() {
             return new ExecutionOutcome(Mode.FALLBACK, 0, -1, -1);
         }
@@ -267,6 +299,7 @@ public final class BaselineExecutionEngine {
             COMPLETE,
             RETURN,
             SUSPEND,
+            SUSPEND_PREFETCH,
             FALLBACK
         }
     }

@@ -1,8 +1,10 @@
 package asia.lira.mercury.jit.runtime;
 
+import asia.lira.mercury.impl.cache.MacroPrefetchInvocationAction;
 import asia.lira.mercury.jit.registry.BaselineCompiledFunctionRegistry;
 import asia.lira.mercury.jit.registry.JitPreparationRegistry;
 import asia.lira.mercury.jit.registry.OptimizedSlotRegistry;
+import asia.lira.mercury.jit.registry.Tier2CompilationCoordinator;
 import asia.lira.mercury.jit.registry.UnknownCommandBindingRegistry;
 import net.minecraft.command.CommandExecutionContext;
 import net.minecraft.command.CommandQueueEntry;
@@ -24,6 +26,7 @@ public final class BaselineCompiledAction<T extends AbstractServerCommandSource<
 
     @Override
     public void execute(T source, CommandExecutionContext<T> context, Frame frame) {
+        Tier2CompilationCoordinator.getInstance().onFunctionInvocation(artifact.program().id(), source.getDispatcher());
         SynchronizationRuntime runtime = SynchronizationRuntime.getInstance();
         ExecutionFrame current = runtime.currentFrame();
         boolean ownsFrame = false;
@@ -73,6 +76,10 @@ public final class BaselineCompiledAction<T extends AbstractServerCommandSource<
                 flushDirtySlots(executionFrame);
                 scheduleSuspension(artifact, executionFrame, source, context, frame, outcome.bindingId(), outcome.nextState(), ownsFrame);
             }
+            case SUSPEND_PREFETCH -> {
+                flushDirtySlots(executionFrame);
+                schedulePrefetchedSuspension(artifact, executionFrame, source, context, frame, outcome.bindingId(), outcome.nextState(), ownsFrame);
+            }
             case FALLBACK -> throw new IllegalStateException("Unexpected fallback outcome from compiled artifact " + artifact.program().id());
         }
     }
@@ -95,6 +102,22 @@ public final class BaselineCompiledAction<T extends AbstractServerCommandSource<
         @SuppressWarnings("unchecked")
         SourcedCommandAction<T> action = (SourcedCommandAction<T>) plan.action();
         context.enqueueCommand(new CommandQueueEntry<>(frame, action.bind(source)));
+        if (nextState >= 0) {
+            context.enqueueCommand(new CommandQueueEntry<>(frame, new BaselineContinuationAction<>(artifact, executionFrame, source, nextState, ownsFrame)));
+        }
+    }
+
+    private static <T extends AbstractServerCommandSource<T>> void schedulePrefetchedSuspension(
+            BaselineCompiledFunctionRegistry.CompiledArtifact artifact,
+            ExecutionFrame executionFrame,
+            T source,
+            CommandExecutionContext<T> context,
+            Frame frame,
+            int planId,
+            int nextState,
+            boolean ownsFrame
+    ) {
+        context.enqueueCommand(new CommandQueueEntry<>(frame, new MacroPrefetchInvocationAction<T>(planId).bind(source)));
         if (nextState >= 0) {
             context.enqueueCommand(new CommandQueueEntry<>(frame, new BaselineContinuationAction<>(artifact, executionFrame, source, nextState, ownsFrame)));
         }

@@ -1,6 +1,8 @@
 package asia.lira.mercury.command;
 
 import asia.lira.mercury.Mercury;
+import asia.lira.mercury.impl.cache.MacroPrefetchExporter;
+import asia.lira.mercury.impl.cache.MacroOptimizationExporter;
 import asia.lira.mercury.ir.FunctionIrDumper;
 import asia.lira.mercury.ir.FunctionIrExporter;
 import asia.lira.mercury.ir.FunctionIrRegistry;
@@ -64,6 +66,12 @@ public class CommandHandler implements CommandRegistrationCallback {
             JitPreparationExporter.ExportResult preparedResult = JitPreparationExporter.exportPrepared(
                     source.getServer().getRunDirectory()
             );
+            MacroPrefetchExporter.ExportResult prefetchResult = MacroPrefetchExporter.export(
+                    source.getServer().getRunDirectory()
+            );
+            MacroOptimizationExporter.ExportResult macroOptimizationResult = MacroOptimizationExporter.export(
+                    source.getServer().getRunDirectory()
+            );
             BaselineClassExporter.ExportResult classResult = BaselineClassExporter.exportClasses(
                     source.getServer().getRunDirectory()
             );
@@ -74,10 +82,17 @@ public class CommandHandler implements CommandRegistrationCallback {
                             + " to " + semanticResult.outputDirectory()
                             + ", prepared=" + preparedResult.exportedCount()
                             + " to " + preparedResult.outputDirectory()
+                            + ", prefetch candidates=" + prefetchResult.candidateCount()
+                            + " active=" + prefetchResult.activeCount()
+                            + " to " + prefetchResult.outputDirectory()
+                            + ", macroProfile=" + macroOptimizationResult.profileCount()
+                            + " specialization=" + macroOptimizationResult.specializationCount()
+                            + " tier2=" + macroOptimizationResult.tier2Count()
+                            + " to " + macroOptimizationResult.outputDirectory()
                             + ", classes=" + classResult.exportedCount()
                             + " to " + classResult.outputDirectory()
             ), false);
-            return parsedResult.exportedCount() + semanticResult.exportedCount() + preparedResult.exportedCount() + classResult.exportedCount();
+            return parsedResult.exportedCount() + semanticResult.exportedCount() + preparedResult.exportedCount() + prefetchResult.candidateCount() + macroOptimizationResult.profileCount() + classResult.exportedCount();
         } catch (Exception e) {
             source.sendError(Text.literal("Failed to export IR: " + e.getMessage()));
             return 0;
@@ -146,6 +161,41 @@ public class CommandHandler implements CommandRegistrationCallback {
         }
     }
 
+    private static int dumpPrefetch(ServerCommandSource source) {
+        try {
+            MacroPrefetchExporter.ExportResult result = MacroPrefetchExporter.export(
+                    source.getServer().getRunDirectory()
+            );
+            source.sendFeedback(() -> Text.literal(
+                    "Exported prefetch candidates=" + result.candidateCount()
+                            + " active=" + result.activeCount()
+                            + " to " + result.outputDirectory()
+            ), false);
+            return result.candidateCount();
+        } catch (Exception e) {
+            source.sendError(Text.literal("Failed to export prefetch dump: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int dumpMacroOptimization(ServerCommandSource source) {
+        try {
+            MacroOptimizationExporter.ExportResult result = MacroOptimizationExporter.export(
+                    source.getServer().getRunDirectory()
+            );
+            source.sendFeedback(() -> Text.literal(
+                    "Exported macroProfile=" + result.profileCount()
+                            + " specialization=" + result.specializationCount()
+                            + " tier2=" + result.tier2Count()
+                            + " to " + result.outputDirectory()
+            ), false);
+            return result.profileCount() + result.specializationCount() + result.tier2Count();
+        } catch (Exception e) {
+            source.sendError(Text.literal("Failed to export macro optimization dump: " + e.getMessage()));
+            return 0;
+        }
+    }
+
     private static int switchJit(ServerCommandSource source, boolean enabled) {
         if (SynchronizationRuntime.getInstance().hasActiveFrames()) {
             source.sendError(Text.literal(
@@ -191,6 +241,12 @@ public class CommandHandler implements CommandRegistrationCallback {
                         )
                         .then(literal("classes")
                                 .executes(context -> dumpClasses(context.getSource()))
+                        )
+                        .then(literal("prefetch")
+                                .executes(context -> dumpPrefetch(context.getSource()))
+                        )
+                        .then(literal("macro-optimization")
+                                .executes(context -> dumpMacroOptimization(context.getSource()))
                         )
                 )
                 .then(literal("jit")

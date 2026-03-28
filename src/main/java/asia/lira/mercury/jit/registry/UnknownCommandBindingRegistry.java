@@ -37,6 +37,7 @@ public final class UnknownCommandBindingRegistry {
 
     private final Map<BindingKey, Integer> idsByKey = new LinkedHashMap<>();
     private final Map<Integer, BindingPlan> plansById = new LinkedHashMap<>();
+    private int nextId;
 
     private UnknownCommandBindingRegistry() {
     }
@@ -48,13 +49,13 @@ public final class UnknownCommandBindingRegistry {
     public void clear() {
         idsByKey.clear();
         plansById.clear();
+        nextId = 0;
     }
 
     public void rebuild(Collection<FunctionIrRegistry.ParsedFunctionIr> functions) {
         clear();
 
         Map<Identifier, List<SourcedCommandAction<?>>> actionCaptures = FunctionActionCaptureRegistry.getInstance().snapshot();
-        int nextId = 0;
         for (FunctionIrRegistry.ParsedFunctionIr functionIr : functions) {
             List<SourcedCommandAction<?>> actions = actionCaptures.getOrDefault(functionIr.id(), List.of());
             for (int nodeIndex = 0; nodeIndex < functionIr.nodes().size(); nodeIndex++) {
@@ -67,11 +68,20 @@ public final class UnknownCommandBindingRegistry {
                     continue;
                 }
 
-                BindingPlan plan = analyze(functionIr.id(), nodeIndex, commandNode, action, nextId);
-                idsByKey.put(new BindingKey(functionIr.id(), nodeIndex), nextId);
-                plansById.put(nextId, plan);
-                nextId++;
+                registerBinding(functionIr.id(), nodeIndex, commandNode, action);
             }
+        }
+    }
+
+    public void registerSynthetic(
+            FunctionIrRegistry.ParsedFunctionIr functionIr,
+            List<? extends SourcedCommandAction<?>> actions
+    ) {
+        for (int nodeIndex = 0; nodeIndex < functionIr.nodes().size() && nodeIndex < actions.size(); nodeIndex++) {
+            if (!(functionIr.nodes().get(nodeIndex) instanceof FunctionIrRegistry.CommandParseNode commandNode)) {
+                continue;
+            }
+            registerBinding(functionIr.id(), nodeIndex, commandNode, actions.get(nodeIndex));
         }
     }
 
@@ -135,6 +145,18 @@ public final class UnknownCommandBindingRegistry {
         Command<?> command = executableContext.getCommand();
         MethodHandle boundRun = BRIGADIER_RUN_HANDLE.bindTo(command);
         return BindingPlan.reflective(bindingId, functionId, nodeIndex, commandNode.sourceText(), executableContext, boundRun);
+    }
+
+    private void registerBinding(
+            Identifier functionId,
+            int nodeIndex,
+            FunctionIrRegistry.CommandParseNode commandNode,
+            SourcedCommandAction<?> action
+    ) {
+        int id = nextId++;
+        BindingPlan plan = analyze(functionId, nodeIndex, commandNode, action, id);
+        idsByKey.put(new BindingKey(functionId, nodeIndex), id);
+        plansById.put(id, plan);
     }
 
     private static boolean isReflectivelyBindable(

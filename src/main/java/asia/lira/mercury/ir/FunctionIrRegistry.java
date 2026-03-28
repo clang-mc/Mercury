@@ -52,7 +52,7 @@ public final class FunctionIrRegistry {
             semanticFunctions.put(functionIr.id(), buildSemantic(functionIr));
         }
         JitPreparationRegistry.getInstance().rebuild(parsedFunctions.values());
-        BaselineCompiledFunctionRegistry.getInstance().rebuild(parsedFunctions.values());
+        BaselineCompiledFunctionRegistry.getInstance().rebuild(parsedFunctions.values(), loadedFunctions);
     }
 
     public synchronized void rebuildSemantic(Map<Identifier, ? extends CommandFunction<?>> loadedFunctions) {
@@ -72,7 +72,7 @@ public final class FunctionIrRegistry {
             semanticFunctions.put(functionIr.id(), buildSemantic(functionIr));
         }
         JitPreparationRegistry.getInstance().rebuild(parsedFunctions.values());
-        BaselineCompiledFunctionRegistry.getInstance().rebuild(parsedFunctions.values());
+        BaselineCompiledFunctionRegistry.getInstance().rebuild(parsedFunctions.values(), loadedFunctions);
     }
 
     public synchronized Optional<ParsedFunctionIr> getParsed(Identifier id) {
