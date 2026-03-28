@@ -1,8 +1,8 @@
 package asia.lira.mercury.jit.specialized.impl.execute;
 
-import asia.lira.mercury.jit.BaselineExecutionEngine;
-import asia.lira.mercury.jit.ExecutionFrame;
-import asia.lira.mercury.jit.JitPreparationRegistry;
+import asia.lira.mercury.jit.runtime.BaselineExecutionEngine;
+import asia.lira.mercury.jit.runtime.ExecutionFrame;
+import asia.lira.mercury.jit.registry.JitPreparationRegistry;
 import asia.lira.mercury.jit.specialized.api.SpecializedExecutor;
 import asia.lira.mercury.jit.specialized.impl.data.StorageAccessRuntime;
 import net.minecraft.command.argument.NbtPathArgumentType;

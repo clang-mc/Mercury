@@ -1,7 +1,7 @@
 package asia.lira.mercury.jit.dump;
 
-import asia.lira.mercury.jit.JitPreparationRegistry;
-import asia.lira.mercury.jit.OptimizedSlotRegistry;
+import asia.lira.mercury.jit.registry.JitPreparationRegistry;
+import asia.lira.mercury.jit.registry.OptimizedSlotRegistry;
 
 import java.util.ArrayList;
 import java.util.List;

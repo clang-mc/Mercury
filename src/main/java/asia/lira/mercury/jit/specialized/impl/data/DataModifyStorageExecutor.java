@@ -1,6 +1,6 @@
 package asia.lira.mercury.jit.specialized.impl.data;
 
-import asia.lira.mercury.jit.ExecutionFrame;
+import asia.lira.mercury.jit.runtime.ExecutionFrame;
 import asia.lira.mercury.jit.specialized.api.SpecializedExecutor;
 import net.minecraft.server.command.ServerCommandSource;
 

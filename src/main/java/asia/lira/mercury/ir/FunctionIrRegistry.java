@@ -1,7 +1,7 @@
 package asia.lira.mercury.ir;
 
-import asia.lira.mercury.jit.BaselineCompiledFunctionRegistry;
-import asia.lira.mercury.jit.JitPreparationRegistry;
+import asia.lira.mercury.jit.registry.BaselineCompiledFunctionRegistry;
+import asia.lira.mercury.jit.registry.JitPreparationRegistry;
 import net.minecraft.server.function.CommandFunction;
 import net.minecraft.util.Identifier;
 import org.jetbrains.annotations.Nullable;

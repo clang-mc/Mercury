@@ -1,6 +1,6 @@
 package asia.lira.mercury.jit.dump;
 
-import asia.lira.mercury.jit.JitPreparationRegistry;
+import asia.lira.mercury.jit.registry.JitPreparationRegistry;
 import net.minecraft.util.Identifier;
 
 import java.io.IOException;

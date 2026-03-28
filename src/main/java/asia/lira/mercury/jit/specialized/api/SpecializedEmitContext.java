@@ -1,6 +1,6 @@
 package asia.lira.mercury.jit.specialized.api;
 
-import asia.lira.mercury.jit.BaselineBytecodeOps;
+import asia.lira.mercury.jit.codegen.BaselineBytecodeOps;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;

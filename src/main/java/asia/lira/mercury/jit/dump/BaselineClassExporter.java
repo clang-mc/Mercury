@@ -1,6 +1,6 @@
 package asia.lira.mercury.jit.dump;
 
-import asia.lira.mercury.jit.BaselineCompiledFunctionRegistry;
+import asia.lira.mercury.jit.registry.BaselineCompiledFunctionRegistry;
 import net.minecraft.util.Identifier;
 
 import java.io.IOException;

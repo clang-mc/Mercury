@@ -133,7 +133,7 @@ public record ExecutePlan(
                         Opcodes.INVOKESTATIC,
                         Type.getInternalName(ExecuteExecutor.class),
                         "resetScore",
-                        "(" + Type.getDescriptor(asia.lira.mercury.jit.ExecutionFrame.class)
+                        "(" + Type.getDescriptor(asia.lira.mercury.jit.runtime.ExecutionFrame.class)
                                 + Type.getDescriptor(net.minecraft.server.command.ServerCommandSource.class)
                                 + Type.getDescriptor(String.class)
                                 + Type.getDescriptor(String.class)
@@ -271,7 +271,7 @@ public record ExecutePlan(
                         Opcodes.INVOKESTATIC,
                         Type.getInternalName(ExecuteExecutor.class),
                         "writeScore",
-                        "(" + Type.getDescriptor(asia.lira.mercury.jit.ExecutionFrame.class)
+                        "(" + Type.getDescriptor(asia.lira.mercury.jit.runtime.ExecutionFrame.class)
                                 + Type.getDescriptor(net.minecraft.server.command.ServerCommandSource.class)
                                 + Type.getDescriptor(String.class)
                                 + Type.getDescriptor(String.class)
@@ -309,7 +309,7 @@ public record ExecutePlan(
                 Opcodes.INVOKESTATIC,
                 Type.getInternalName(ExecuteExecutor.class),
                 "readScore",
-                "(" + Type.getDescriptor(asia.lira.mercury.jit.ExecutionFrame.class)
+                "(" + Type.getDescriptor(asia.lira.mercury.jit.runtime.ExecutionFrame.class)
                         + Type.getDescriptor(net.minecraft.server.command.ServerCommandSource.class)
                         + Type.getDescriptor(String.class)
                         + Type.getDescriptor(String.class)
@@ -328,7 +328,7 @@ public record ExecutePlan(
                 Opcodes.INVOKESTATIC,
                 Type.getInternalName(ExecuteExecutor.class),
                 "writeScore",
-                "(" + Type.getDescriptor(asia.lira.mercury.jit.ExecutionFrame.class)
+                "(" + Type.getDescriptor(asia.lira.mercury.jit.runtime.ExecutionFrame.class)
                         + Type.getDescriptor(net.minecraft.server.command.ServerCommandSource.class)
                         + Type.getDescriptor(String.class)
                         + Type.getDescriptor(String.class)
@@ -347,7 +347,7 @@ public record ExecutePlan(
                 Opcodes.INVOKESTATIC,
                 Type.getInternalName(ExecuteExecutor.class),
                 "writeScore",
-                "(" + Type.getDescriptor(asia.lira.mercury.jit.ExecutionFrame.class)
+                "(" + Type.getDescriptor(asia.lira.mercury.jit.runtime.ExecutionFrame.class)
                         + Type.getDescriptor(net.minecraft.server.command.ServerCommandSource.class)
                         + Type.getDescriptor(String.class)
                         + Type.getDescriptor(String.class)

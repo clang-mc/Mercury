@@ -1,6 +1,6 @@
 package asia.lira.mercury.mixin;
 
-import asia.lira.mercury.jit.SynchronizationRuntime;
+import asia.lira.mercury.jit.runtime.SynchronizationRuntime;
 import net.minecraft.scoreboard.ScoreHolder;
 import net.minecraft.scoreboard.ScoreboardObjective;
 import net.minecraft.scoreboard.ScoreboardScore;

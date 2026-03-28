@@ -1,6 +1,6 @@
 package asia.lira.mercury.mixin;
 
-import asia.lira.mercury.jit.GlobalCompilationCoordinator;
+import asia.lira.mercury.jit.registry.GlobalCompilationCoordinator;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.common.collect.ImmutableMap.Builder;
