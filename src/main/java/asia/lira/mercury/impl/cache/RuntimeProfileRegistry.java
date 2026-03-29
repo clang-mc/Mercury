@@ -21,6 +21,10 @@ public final class RuntimeProfileRegistry {
         functionProfiles.clear();
     }
 
+    public void retireTier2Caller(net.minecraft.util.Identifier functionId) {
+        functionProfiles.remove(functionId);
+    }
+
     public MacroCallsiteProfile profileFor(int planId, MacroCallsiteKey key, java.util.List<String> argumentNames) {
         return macroProfiles.computeIfAbsent(planId, ignored -> new MacroCallsiteProfile(key, argumentNames));
     }

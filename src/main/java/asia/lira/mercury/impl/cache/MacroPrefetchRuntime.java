@@ -94,10 +94,38 @@ public final class MacroPrefetchRuntime {
         if (plan == null) {
             throw new IllegalStateException("Missing macro prefetch plan " + planId);
         }
+        MacroOptimizationCoordinator.getInstance().installPending(typedSource.getDispatcher());
+        registry.onMacroWithStorageCall(planId);
         MacroArgumentProvider provider = registry.activeProvider(planId);
-        Procedure<T> procedure = provider != null
-                ? ((FastMacro<T>) plan.macro()).withMacroReplaced(provider, typedSource.getDispatcher())
-                : ((FastMacro<T>) plan.macro()).withMacroReplaced(registry.loadArgumentsCompound(planId), typedSource.getDispatcher());
+        boolean prefetchHit = provider != null;
+        NbtCompound arguments = provider != null
+                ? provider.resolveArguments(plan.argumentNames())
+                : registry.loadArgumentsCompound(planId);
+        InstalledMacroSpecialization installed = MacroOptimizationCoordinator.getInstance().matchingInstalled(planId, arguments);
+        boolean specializedUsed = false;
+        boolean guardHit = false;
+        Procedure<T> procedure;
+        if (installed != null) {
+            guardHit = true;
+            specializedUsed = true;
+            procedure = (Procedure<T>) installed.procedure();
+        } else if (provider != null) {
+            registry.recordHit();
+            procedure = ((FastMacro<T>) plan.macro()).withMacroReplaced(provider, typedSource.getDispatcher());
+        } else {
+            registry.recordMiss();
+            procedure = ((FastMacro<T>) plan.macro()).withMacroReplaced(arguments, typedSource.getDispatcher());
+        }
+        MacroOptimizationCoordinator.getInstance().recordInvocation(
+                planId,
+                plan.callsiteKey(),
+                plan.argumentNames(),
+                arguments,
+                prefetchHit,
+                specializedUsed,
+                guardHit
+        );
+        MacroOptimizationCoordinator.getInstance().installPending(typedSource.getDispatcher());
         CommandExecutionContext.enqueueProcedureCall(context, procedure, typedSource, typedSource.getReturnValueConsumer());
     }
 

@@ -218,6 +218,7 @@ public final class BaselineCompiledFunctionRegistry {
     }
 
     public void installTier2Artifact(Identifier id, CompiledArtifact artifact) {
+        tier1Artifacts.remove(id);
         tier2Artifacts.put(id, artifact);
     }
 

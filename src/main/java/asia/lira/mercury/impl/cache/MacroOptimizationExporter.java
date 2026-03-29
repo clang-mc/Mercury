@@ -6,8 +6,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class MacroOptimizationExporter {
     private MacroOptimizationExporter() {
@@ -60,13 +62,17 @@ public final class MacroOptimizationExporter {
         }
 
         int tier2Count = 0;
-        for (Map.Entry<net.minecraft.util.Identifier, FunctionExecutionProfile> entry : RuntimeProfileRegistry.getInstance().functionProfiles().entrySet()) {
-            boolean tier2Installed = asia.lira.mercury.jit.registry.Tier2CompilationCoordinator.getInstance().isTier2Installed(entry.getKey());
+        Set<net.minecraft.util.Identifier> tier2Functions = asia.lira.mercury.jit.registry.Tier2CompilationCoordinator.getInstance().installedFunctions();
+        Set<net.minecraft.util.Identifier> functionIds = new LinkedHashSet<>(RuntimeProfileRegistry.getInstance().functionProfiles().keySet());
+        functionIds.addAll(tier2Functions);
+        for (net.minecraft.util.Identifier functionId : functionIds) {
+            FunctionExecutionProfile profile = RuntimeProfileRegistry.getInstance().functionProfiles().get(functionId);
+            boolean tier2Installed = tier2Functions.contains(functionId);
             List<String> lines = new ArrayList<>();
-            lines.add("function=" + entry.getKey());
-            lines.add("executions=" + entry.getValue().executions());
+            lines.add("function=" + functionId);
+            lines.add("executions=" + (profile == null ? "<retired>" : profile.executions()));
             lines.add("tier2Installed=" + tier2Installed);
-            write(tier2Root, entry.getKey().getNamespace() + "_" + entry.getKey().getPath().replace('/', '_') + ".txt", lines);
+            write(tier2Root, functionId.getNamespace() + "_" + functionId.getPath().replace('/', '_') + ".txt", lines);
             if (tier2Installed) {
                 tier2Count++;
             }

@@ -32,10 +32,10 @@ public final class Tier2CompilationCoordinator {
     }
 
     public void onFunctionInvocation(Identifier functionId, com.mojang.brigadier.CommandDispatcher<?> dispatcher) {
-        int executions = asia.lira.mercury.impl.cache.RuntimeProfileRegistry.getInstance().incrementFunctionExecution(functionId);
         if (installedTier2.contains(functionId)) {
             return;
         }
+        int executions = asia.lira.mercury.impl.cache.RuntimeProfileRegistry.getInstance().incrementFunctionExecution(functionId);
         int threshold = retryThresholds.getOrDefault(functionId, TIER2_THRESHOLD);
         if (executions < threshold) {
             return;
@@ -63,6 +63,7 @@ public final class Tier2CompilationCoordinator {
         BaselineCompiledFunctionRegistry.getInstance().installTier2Artifact(functionId, tier2Artifact);
         installedTier2.add(functionId);
         retryThresholds.remove(functionId);
+        asia.lira.mercury.impl.cache.RuntimeProfileRegistry.getInstance().retireTier2Caller(functionId);
     }
 
     @SuppressWarnings("unchecked")
@@ -72,6 +73,10 @@ public final class Tier2CompilationCoordinator {
 
     public boolean isTier2Installed(Identifier functionId) {
         return installedTier2.contains(functionId);
+    }
+
+    public Set<Identifier> installedFunctions() {
+        return Set.copyOf(installedTier2);
     }
 
     private static LoweredUnit rewriteTier2(Identifier functionId, LoweredUnit unit) {

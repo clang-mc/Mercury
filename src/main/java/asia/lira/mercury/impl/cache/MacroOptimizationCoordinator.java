@@ -81,7 +81,7 @@ public final class MacroOptimizationCoordinator {
             return;
         }
         int functionExecutions = RuntimeProfileRegistry.getInstance().functionExecutions(callsiteKey.callerFunctionId());
-        int budget = specializationBudget(plan.macro().lines.size(), functionExecutions);
+        int budget = specializationBudget(plan.macro().lines.size(), Math.max(functionExecutions, profile.totalCalls()));
         boolean requireDominantSingle = budget == 1;
         for (MacroSpecializationCandidate candidate : profile.specializationCandidates(budget, requireDominantSingle)) {
             String queueKey = planId + ":" + candidate.guardPlan().signature();

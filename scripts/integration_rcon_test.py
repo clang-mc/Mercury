@@ -70,7 +70,13 @@ def prepare_datapack_copy() -> None:
 
 def start_server() -> subprocess.Popen[str]:
     if LOG_PATH.exists():
-        LOG_PATH.unlink()
+        try:
+            LOG_PATH.unlink()
+        except PermissionError:
+            fallback = LOG_PATH.with_name(f"{LOG_PATH.stem}-{int(time.time())}{LOG_PATH.suffix}")
+            if fallback.exists():
+                fallback.unlink()
+            LOG_PATH.replace(fallback)
     log_handle = LOG_PATH.open("w", encoding="utf-8")
     return subprocess.Popen(
         ["cmd.exe", "/c", ".\\gradlew.bat runServer --console=plain"],
@@ -166,6 +172,10 @@ def run_assertions(client: RconClient) -> None:
     run_command(client, "function demo:macro_call_storage_hot", "Running function demo:macro_call_storage_hot")
     run_command(client, "scoreboard players get alpha mercury_macro", "alpha has 3 [mercury_macro]")
 
+    run_hot_macro_sequence(client, "demo:macro_call_storage_tier2_growth", [1] * 50 + [2] * 50)
+    run_hot_macro_sequence(client, "demo:macro_call_storage_tier2_growth", [3] * 6)
+    run_command(client, "scoreboard players get alpha mercury_macro", "alpha has 3 [mercury_macro]")
+
     run_hot_macro_sequence(client, "demo:macro_call_storage_large_hot", [7] * 80 + [8] * 20)
     run_command(client, "scoreboard players set input mercury_macro_input 7")
     run_command(client, "function demo:macro_call_storage_large_hot", "Running function demo:macro_call_storage_large_hot")
@@ -191,6 +201,8 @@ def run_assertions(client: RconClient) -> None:
         raise AssertionError("Missing macro_call_storage.class export")
     if not (class_dir / "macro_call_storage_hot.class").exists():
         raise AssertionError("Missing macro_call_storage_hot.class export")
+    if not (class_dir / "macro_call_storage_tier2_growth.class").exists():
+        raise AssertionError("Missing macro_call_storage_tier2_growth.class export")
     if not (class_dir / "macro_call_storage_unstable.class").exists():
         raise AssertionError("Missing macro_call_storage_unstable.class export")
     if not (class_dir / "macro_call_storage_large_hot.class").exists():
@@ -212,6 +224,9 @@ def run_assertions(client: RconClient) -> None:
         raise AssertionError("macro_call_storage_hot.class was not rebuilt into a tier2 guarded macro dispatch")
     if b"invokePrefetchedMacro" in hot_class_bytes:
         raise AssertionError("macro_call_storage_hot.class should no longer reference tier1 macro invocation after tier2 install")
+    growth_class_bytes = (class_dir / "macro_call_storage_tier2_growth.class").read_bytes()
+    if b"loadArgumentsForTier2" not in growth_class_bytes:
+        raise AssertionError("macro_call_storage_tier2_growth.class was not rebuilt into a tier2 guarded macro dispatch")
     unstable_class_bytes = (class_dir / "macro_call_storage_unstable.class").read_bytes()
     if b"invokePrefetchedMacro" not in unstable_class_bytes or b"prefetch" not in unstable_class_bytes:
         raise AssertionError("macro_call_storage_unstable.class does not contain prefetch macro calls")
@@ -248,7 +263,7 @@ def run_assertions(client: RconClient) -> None:
 
     hot_profile_path, hot_profile = require_dump_containing(profile_files, "callerFunctionId=demo:macro_call_storage_hot")
     if "totalCalls=100" not in hot_profile:
-        raise AssertionError(f"Expected hot profile to stop at the tier2 threshold, got: {hot_profile_path} -> {hot_profile!r}")
+        raise AssertionError(f"Expected hot profile to stop growing on tier2 guard hits, got: {hot_profile_path} -> {hot_profile!r}")
     require_positive_counter(hot_profile, "guardHits")
     require_positive_counter(hot_profile, "guardMisses")
     require_positive_counter(hot_profile, "specializationUses")
@@ -274,9 +289,24 @@ def run_assertions(client: RconClient) -> None:
         if not any(expected_value in text for _, text in hot_specializations):
             raise AssertionError(f"Expected installed hot specialization for {expected_value}")
 
+    growth_specializations = [
+        (path, text) for path, text in specialization_files.items() if "callerFunctionId=demo:macro_call_storage_tier2_growth" in text
+    ]
+    if len(growth_specializations) < 3:
+        raise AssertionError(f"Expected post-tier2 growth callsite to install a third specialization, got {len(growth_specializations)}")
+    for expected_value in ("value=1", "value=2", "value=3"):
+        if not any(expected_value in text for _, text in growth_specializations):
+            raise AssertionError(f"Expected growth specialization for {expected_value}")
+
+    growth_profile_path, growth_profile = require_dump_containing(profile_files, "callerFunctionId=demo:macro_call_storage_tier2_growth")
+    if "totalCalls=106" not in growth_profile:
+        raise AssertionError(f"Expected growth profile to continue after tier2 and record new fallback values, got: {growth_profile_path} -> {growth_profile!r}")
+    if "value=3" not in growth_profile:
+        raise AssertionError(f"Expected growth profile to observe post-tier2 fallback value=3: {growth_profile_path} -> {growth_profile!r}")
+
     large_profile_path, large_profile = require_dump_containing(profile_files, "callerFunctionId=demo:macro_call_storage_large_hot")
     if "totalCalls=100" not in large_profile:
-        raise AssertionError(f"Expected large macro profile to stop at the tier2 threshold, got: {large_profile_path} -> {large_profile!r}")
+        raise AssertionError(f"Expected large macro profile to stop growing on tier2 guard hits, got: {large_profile_path} -> {large_profile!r}")
     if 'value=7' not in large_profile:
         raise AssertionError(f"Expected dominant value=7 in large macro profile: {large_profile_path} -> {large_profile!r}")
 
@@ -293,9 +323,18 @@ def run_assertions(client: RconClient) -> None:
     hot_tier2_path, hot_tier2 = require_dump_containing(tier2_files, "function=demo:macro_call_storage_hot")
     if "tier2Installed=true" not in hot_tier2:
         raise AssertionError(f"Expected tier2 installation for hot macro caller: {hot_tier2_path} -> {hot_tier2!r}")
+    if "executions=<retired>" not in hot_tier2:
+        raise AssertionError(f"Expected retired tier1 execution profile for hot macro caller: {hot_tier2_path} -> {hot_tier2!r}")
+    growth_tier2_path, growth_tier2 = require_dump_containing(tier2_files, "function=demo:macro_call_storage_tier2_growth")
+    if "tier2Installed=true" not in growth_tier2:
+        raise AssertionError(f"Expected tier2 installation for growth macro caller: {growth_tier2_path} -> {growth_tier2!r}")
+    if "executions=<retired>" not in growth_tier2:
+        raise AssertionError(f"Expected retired tier1 execution profile for growth macro caller: {growth_tier2_path} -> {growth_tier2!r}")
     large_tier2_path, large_tier2 = require_dump_containing(tier2_files, "function=demo:macro_call_storage_large_hot")
     if "tier2Installed=true" not in large_tier2:
         raise AssertionError(f"Expected tier2 installation for large hot macro caller: {large_tier2_path} -> {large_tier2!r}")
+    if "executions=<retired>" not in large_tier2:
+        raise AssertionError(f"Expected retired tier1 execution profile for large hot macro caller: {large_tier2_path} -> {large_tier2!r}")
 
 
 def stop_server(client: RconClient, process: subprocess.Popen[str]) -> None:
